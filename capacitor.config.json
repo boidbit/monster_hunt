@@ -1,0 +1,6 @@
+{
+  "appId": "com.talibmohd.monsterhunt",
+  "appName": "Monster Hunt",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}
