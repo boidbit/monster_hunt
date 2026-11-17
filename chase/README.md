@@ -1,47 +1,36 @@
-# The Chase — director mode
+# Monster Hunt — adaptive chase director
 
-An automatically driven, endlessly streamed pursuit using Monster Hunt's original monster and armored truck models.
+The director drives through a streamed grid of connected streets and intersections. It selects left, right and straight routes using seeded variation, traffic, the monster's position and recent turns. The truck brakes for traffic, changes lanes, slows and drifts through turns, and boosts when threatened.
 
-## Watch and record
+Thirty moving cars and buses occupy the nearby roads. They follow traffic ahead, brake when blocked, and accelerate and sound horns near the monster. The monster chooses swipes, charges, leaps, building smashes and aerial shortcuts based on distance, street turns, nearby traffic and recently used attacks. Interceptions move continuously to a predicted route position and can land ahead of the truck; the monster can misjudge a changing situation.
 
-The root game's start screen links to `chase/index.html`. Preview needs internet for the pinned Three.js module; it runs until paused. The director drives the truck and controls the camera.
+There is no timestamped attack sequence. Event-specific cameras include pursuit, rear tracking, side tracking, intersection and reveal shots. Framing and building raycasts are checked every frame. Shots have a minimum hold time; when a building obstructs the chase, the camera rises or cuts to a clear view. Aerial shortcuts deliberately use wider views.
 
-After this branch is merged into the default branch, open **Actions → Record Monster Chase → Run workflow**. Choose 30–60 seconds, a uint32 seed, pursuit intensity, ending and portrait/landscape framing. Download the `monster-chase-<run number>` artifact from the completed run.
+## One workflow
 
-This feature branch automatically produces a 45-second portrait take on source pushes, so it can be reviewed before merging. No tools need installing on the viewer's laptop. The workflow only uploads downloadable artifacts; it does not publish videos or create releases. Artifacts expire after 14 days.
+After merging the PR into the default branch, open **Actions → Record Monster Chase → Run workflow**.
 
-The artifact contains:
-- `monster-chase.mp4`: H.264/AAC, 30 FPS, 720×1280 portrait or 1280×720 landscape.
-- Five representative shots and a contact sheet.
-- `report.json`: seed, configuration, simulation events, camera visibility metrics, per-frame telemetry and media metadata.
-- A browser smoke report.
+- Keep seed **auto** for a new episode. Supply a uint32 seed for a replay without past episode memory.
+- Choose a maximum duration between 30 and 60 seconds. The director looks for an ending after 30 seconds and stops at the maximum if none occurs.
+- Choose intensity, ending preference and portrait (720×1280) or landscape (1280×720).
+- The workflow validates simulation and audio, checks two browser configurations, records 30 FPS, encodes H.264/AAC, and uploads one video ZIP.
+- Download from the completed run's **Artifacts** section while signed in to GitHub. Open **monster-chase.mp4** inside the ZIP. Artifacts expire after 14 days; this workflow does not publish to YouTube.
+- The run summary includes GitHub's generated download link. Reports contain the actual seed, duration, events, route choices and camera cuts.
 
-## How it works
+Automatic-seed manual runs restore/save recent attack, turn and shot memory through a GitHub Actions cache. Cache retention/eviction can reset that memory; individual episodes still avoid recent choices. Same-branch runs are serialized. Explicit seeds ignore prior workflow memory. Browser preview uses localStorage memory and a new seed on reload. Recording never depends on browser localStorage.
 
-`core.mjs` simulates at 60 Hz. Seeded chunks hold continuous connected road geometry, buildings and traffic. Eight chunks stay active; old geometry is disposed and the origin shifts every 320 metres. Traffic and attack reactions use bounded acceleration and lateral steering, with real collision damage.
+Feature-branch source pushes run the same workflow with seed 42 and a 45-second maximum, allowing review before merge. No tools need installing on the viewer's computer.
 
-The director stages five attacks per episode: swipe, charge, leap, building smash, charge. The monster follows and intercepts using acceleration-limited pursuit. The episode repeats during endless preview; truck health resets at each episode boundary. Escape and cliffhanger endings control the final pursuit gap.
+## Validation and limits
 
-`scene.mjs` renders the actors, streamed streets, particles, captions and smoothly changing cameras. `models.mjs` adapts the original game's models.
+Pure simulation tests cover seeded determinism, route and attack variation across 12 configurations, variable endings, physical interception continuity, history changes, moving traffic, ten simulated minutes of bounded streaming and finite audible audio. Cloud checks cover portrait seed 42 and landscape seed 99, actor framing, building obstruction, console errors and bounded geometry. Media checks verify duration, dimensions, frame rate and audio presence. Representative images still need visual review.
 
-The cloud recorder renders one frame per 1/30 simulation second through Playwright. It can run slower than real time without skipping video frames. `audio.mjs` supplies synthesized event sounds and engine audio; the renderer writes a synchronized WAV and FFmpeg encodes the MP4. The same sound definitions play in live preview.
+Twenty-five city blocks, thirty traffic vehicles, route history and event history are bounded. World coordinates rebase every 360 units. Shared geometry/materials are reused. Preview runs indefinitely; recording stops at an episode ending. Health has a cinematic survival floor.
 
-Recording blocks external browser requests and serves the exact Three.js package installed on the runner. Dependencies are pinned in `tools/render/package.json`. Live preview uses the same Three.js version from a CDN.
-
-## Verification
-
-The workflow checks deterministic replays, all attack types over 24 seed/duration/intensity combinations, ten simulated minutes of bounded streaming, and finite audible audio. Browser checks verify camera visibility, bounded geometry counts and console errors. Export checks verify duration, dimensions, FPS and audio presence. Review the actual take as well: screen-space actor visibility alone cannot judge storytelling or occlusion.
+The city is currently a procedural street grid, with varying road widths and building heights. Flyovers, tunnels, ground-level monster pathfinding around entire blocks, manual driving controls and social-media uploads are not implemented. Shortcuts are visible aerial movements, not teleports.
 
 ## Development on a suitable machine
 
-```sh
-node --test tools/render/core.test.mjs
-npm install --prefix tools/render
-node tools/render/node_modules/playwright/cli.js install --with-deps chromium
-node tools/render/record.mjs --smoke
-node tools/render/record.mjs
-```
+Run node --test tools/render/core.test.mjs. Install tools/render dependencies, Playwright Chromium and FFmpeg on that machine; then run node tools/render/record.mjs. Use --smoke for browser checks. CHASE_DURATION, CHASE_SEED, CHASE_INTENSITY, CHASE_ENDING and CHASE_FORMAT override defaults.
 
-FFmpeg and ffprobe must be available for export. Defaults are seed 42, 45 seconds, savage intensity, escape ending and portrait format. Override with `CHASE_SEED`, `CHASE_DURATION`, `CHASE_INTENSITY`, `CHASE_ENDING`, and `CHASE_FORMAT`.
-
-This is a cinematic director mode. It does not add manual driving controls, multiplayer, a mission campaign or social-media uploads.
+The recording browser blocks external network requests and serves pinned Three.js locally. Live preview loads the same pinned module from its CDN. Original monster and truck models are preserved.

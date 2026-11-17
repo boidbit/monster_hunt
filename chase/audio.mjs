@@ -3,6 +3,7 @@ export function sound(event, rate = 48000) {
   const profiles = {
     start:[.9,110,42,.38], attack:[.75,100,45,.42], impact:[.65,85,28,.48],
     collapse:[1.2,65,25,.42], hit:[.4,280,70,.28], traffic:[.5,160,40,.3],
+    horn:[.32,330,310,.16], turn:[.45,650,180,.12], reveal:[.8,70,30,.4], nearMiss:[.3,500,100,.16],
     dodge:[.25,420,120,.12], foot:[.15,70,32,.19]
   };
   const p = profiles[event.type];

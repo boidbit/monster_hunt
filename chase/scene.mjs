@@ -1,36 +1,20 @@
-import {Chase, FIXED_DT, road, worldPoint, random, clamp} from './core.mjs';
-import {buildMonster, buildTruck} from './models.mjs';
+import {Chase,FIXED_DT,GRID,streetWidth,random,clamp,distance} from './core.mjs';
+import {buildMonster,buildTruck} from './models.mjs';
 import {LiveAudio} from './audio.mjs';
-
-const params=new URLSearchParams(location.search), capture=params.get('capture')==='1';
-if(capture) document.body.classList.add('capture');
-const config={seed:Number(params.get('seed')??42),duration:Number(params.get('duration')??45),
-  intensity:params.get('intensity')??'savage',ending:params.get('ending')??'escape'};
-let THREE;
-try {
-  THREE=await import(capture ? '/vendor/three.module.js' : 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js');
-} catch(error) {
-  document.getElementById('error').hidden=false;
-  document.getElementById('error').textContent='The city could not load. Check your connection and reload.';
-  throw error;
-}
-const sim=new Chase(config), audio=new LiveAudio();
-const scene=new THREE.Scene();
-const sky=document.createElement('canvas');sky.width=2;sky.height=256;
-const skyCtx=sky.getContext('2d'),gradient=skyCtx.createLinearGradient(0,0,0,256);
-gradient.addColorStop(0,'#345974');gradient.addColorStop(.48,'#9ab5ba');gradient.addColorStop(1,'#f9c995');
-skyCtx.fillStyle=gradient;skyCtx.fillRect(0,0,2,256);
-scene.background=new THREE.CanvasTexture(sky);scene.fog=new THREE.Fog(0xbfc6bb,85,235);
-const renderer=new THREE.WebGLRenderer({canvas:document.getElementById('game'),antialias:true, preserveDrawingBuffer:true});
-renderer.setPixelRatio(capture?1:Math.min(devicePixelRatio,1.5));
-renderer.setSize(innerWidth,innerHeight);renderer.outputEncoding=THREE.sRGBEncoding;
-renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
-const camera=new THREE.PerspectiveCamera(52,innerWidth/innerHeight,.1,320);
-scene.add(new THREE.HemisphereLight(0xd2eefa,0x625356,.98));
-const sun=new THREE.DirectionalLight(0xffe0b2,1.08);sun.castShadow=true;
-sun.shadow.mapSize.set(512,512);Object.assign(sun.shadow.camera,{left:-24,right:24,top:24,bottom:-24,near:1,far:90});
-sun.shadow.bias=-.001;scene.add(sun,sun.target);
-
+const params=new URLSearchParams(location.search),capture=params.get('capture')==='1';
+if(capture)document.body.classList.add('capture');
+const config={seed:Number(params.get('seed')??crypto.getRandomValues(new Uint32Array(1))[0]),duration:Number(params.get('duration')??60),intensity:params.get('intensity')??'savage',ending:params.get('ending')??'auto'};
+let history={};try{history=JSON.parse(params.get('history')||localStorage.getItem('monster-director-history')||'{}');}catch{}
+const THREE=await import(capture?'/vendor/three.module.js':'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js');
+const sim=new Chase({...config,history}),audio=new LiveAudio(),scene=new THREE.Scene();
+scene.background=new THREE.Color(0x8da9b7);scene.fog=new THREE.Fog(0x8da9b7,100,245);
+const renderer=new THREE.WebGLRenderer({canvas:document.getElementById('game'),antialias:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(capture?1:Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);
+renderer.outputEncoding=THREE.sRGBEncoding;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+const camera=new THREE.PerspectiveCamera(52,innerWidth/innerHeight,.1,450);
+scene.add(new THREE.HemisphereLight(0xcce9ff,0x6e5963,.9));
+const sun=new THREE.DirectionalLight(0xffdca6,1.15);sun.castShadow=true;sun.shadow.mapSize.set(512,512);
+Object.assign(sun.shadow.camera,{left:-40,right:40,top:40,bottom:-40,near:1,far:140});sun.shadow.bias=-.001;scene.add(sun,sun.target);
 const box=new THREE.BoxGeometry(1,1,1), cylinder=new THREE.CylinderGeometry(1,1,1,7);
 const asphalt=new THREE.MeshLambertMaterial({color:0x35495a}), sidewalk=new THREE.MeshLambertMaterial({color:0xb0b2a3});
 const roadLine=new THREE.MeshBasicMaterial({color:0xf6d48e}), white=new THREE.MeshBasicMaterial({color:0xe2e1c9});
@@ -54,16 +38,6 @@ ground.rotation.x=-Math.PI/2;ground.position.y=-.08;ground.receiveShadow=true;sc
 function mesh(parent,geo,mat,x,y,z,sx=1,sy=1,sz=1){
   const m=new THREE.Mesh(geo,mat);m.position.set(x,y,z);m.scale.set(sx,sy,sz);parent.add(m);return m;
 }
-function strip(start,width,y){
-  const vertices=[],indices=[];
-  for(let i=0;i<=16;i++){
-    const s=start+i*5;
-    for(const side of [-1,1]){const p=worldPoint(s,side*width,start);vertices.push(p.x,y,p.z);}
-    if(i<16){const n=i*2;indices.push(n,n+2,n+1,n+1,n+2,n+3);}
-  }
-  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));geo.setIndex(indices);geo.computeVertexNormals();
-  return geo;
-}
 function simpleCar(parent,color){
   const g=new THREE.Group();parent.add(g);
   mesh(g,box,carMats[color],0,.8,0,2.15,.8,4);
@@ -73,214 +47,164 @@ function simpleCar(parent,color){
   for(const x of [-1,1])for(const z of [-1.2,1.2]){const m=mesh(g,cylinder,wheelMat,x,.45,z,.45,.3,.45);m.rotation.z=Math.PI/2;}
   return g;
 }
-const chunks=new Map(), buildingObjects=new Map(), trafficObjects=new Map();
+
+const chunks=new Map(),buildingObjects=new Map(),trafficObjects=new Map();
 function createChunk(desc){
-  const root=new THREE.Group(), geos=[];
-  const pavement=strip(desc.start,13,.02),street=strip(desc.start,10,.06);geos.push(pavement,street);
-  const p=new THREE.Mesh(pavement,sidewalk),r=new THREE.Mesh(street,asphalt);r.receiveShadow=true;root.add(p,r);
-  for(let s=desc.start+4;s<desc.start+80;s+=10)for(const lane of [-3.33,3.33]){
-    const q=worldPoint(s,lane,desc.start);const m=mesh(root,box,roadLine,q.x,.075,q.z,.13,.025,4.5);m.rotation.y=Math.atan(road(s).dx);
-  }
-  // Cross streets, zebra crossings, and terraces break up the endless avenue.
-  const cross=worldPoint(desc.start+70,0,desc.start);
-  mesh(root,box,asphalt,cross.x,.035,cross.z,120,.03,13);
-  for(let i=-7;i<=7;i+=2)mesh(root,box,white,cross.x+i,.08,cross.z-9,1,.025,3.2);
-  for(const b of desc.buildings){
-    const q=worldPoint(b.s,b.lane,desc.start), g=new THREE.Group();g.position.set(q.x,0,q.z);root.add(g);
-    const facade=mesh(g,box,buildingsMats[b.color],0,b.height/2,0,b.width,b.height,b.depth);
-    mesh(g,box,roof,0,b.height+.15,0,b.width+.4,.35,b.depth+.4);
-    mesh(g,box,sidewalk,0,.2,0,b.width+1.5,.4,b.depth+1.5);
-    if(b.height>25)mesh(g,box,dark,1,b.height+1.3,0,2,2.5,2);
-    buildingObjects.set(b.id,{g,desc:b,fall:null,facade});
-  }
-  for(const o of desc.traffic){
-    const g=simpleCar(root,o.color),q=worldPoint(o.s,o.lane,desc.start);g.position.set(q.x,0,q.z);g.rotation.y=Math.atan(road(o.s).dx);
-    trafficObjects.set(o.id,g);
-  }
-  for(let s=desc.start+12;s<desc.start+80;s+=28)for(const side of [-1,1]){
-    const q=worldPoint(s,side*11.8,desc.start);
-    mesh(root,cylinder,dark,q.x,3,q.z,.09,6,.09);
-    mesh(root,box,dark,q.x-side*.7,5.9,q.z,1.5,.1,.12);
-    mesh(root,box,lampLight,q.x-side*1.3,5.8,q.z,.55,.14,.4);
-    const tree=worldPoint(s+7,side*12.3,desc.start);
-    mesh(root,cylinder,roof,tree.x,1.2,tree.z,.2,2.4,.2);
-    mesh(root,box,foliage,tree.x,3,tree.z,2.2,2.5,2.2);
-  }
-  root.position.z=desc.start-sim.origin;scene.add(root);chunks.set(desc.index,{root,geos,desc});
+ const root=new THREE.Group();scene.add(root);
+ const x=desc.x*GRID,z=desc.z*GRID,w=streetWidth(desc.x,desc.z);
+ mesh(root,box,sidewalk,0,0,45,26,.1,90);
+ mesh(root,box,sidewalk,45,0,0,90,.1,26);
+ mesh(root,box,asphalt,0,.07,45,w*2,.05,90);
+ mesh(root,box,asphalt,45,.07,0,90,.05,w*2);
+ mesh(root,box,asphalt,0,.08,0,26,.05,26);
+ for(let t=20;t<80;t+=12){mesh(root,box,roadLine,0,.11,t,.16,.02,5);mesh(root,box,roadLine,t,.11,0,5,.02,.16);}
+ for(let t=-8;t<=8;t+=3){mesh(root,box,white,t,.12,14,1.3,.02,3);mesh(root,box,white,14,.12,t,3,.02,1.3);}
+ for(const b of desc.buildings){
+  const g=new THREE.Group();g.position.set(b.x-x,0,b.z-z);root.add(g);
+  const facade=mesh(g,box,buildingsMats[b.color],0,b.height/2,0,b.width,b.height,b.depth);
+  facade.castShadow=true;facade.receiveShadow=true;
+  mesh(g,box,roof,0,b.height+.2,0,b.width+.5,.4,b.depth+.5);
+  mesh(g,box,dark,2,b.height+1,1,3,2,3);
+  buildingObjects.set(b.id,{g,facade,desc:b,fall:null});
+ }
+ for(const t of [28,62])for(const side of [-1,1]){
+  mesh(root,cylinder,dark,side*12,3,t,.1,6,.1);
+  mesh(root,box,lampLight,side*11,5.8,t,2,.15,.4);
+ }
+ chunks.set(desc.id,{root,desc});root.position.set(x-sim.origin.x,0,z-sim.origin.z);
 }
 function syncCity(){
-  for(const [id,c]of chunks)if(!sim.chunks.has(id)){
-    scene.remove(c.root);for(const geo of c.geos)geo.dispose();
-    for(const b of c.desc.buildings)buildingObjects.delete(b.id);
-    for(const o of c.desc.traffic)trafficObjects.delete(o.id);
-    chunks.delete(id);
-  }
-  for(const [id,desc]of sim.chunks)if(!chunks.has(id))createChunk(desc);
-  for(const c of chunks.values())c.root.position.z=c.desc.start-sim.origin;
-  for(const c of sim.chunks.values())for(const o of c.traffic){const g=trafficObjects.get(o.id);if(g)g.visible=!o.hit;}
-  ground.position.z=sim.car.s-sim.origin;
+ for(const [id,c]of chunks)if(!sim.chunks.has(id)){scene.remove(c.root);for(const b of c.desc.buildings)buildingObjects.delete(b.id);chunks.delete(id);}
+ for(const [id,c]of sim.chunks)if(!chunks.has(id))createChunk(c);
+ for(const c of chunks.values())c.root.position.set(c.desc.x*GRID-sim.origin.x,0,c.desc.z*GRID-sim.origin.z);
+ const active=new Set(sim.traffic.map(t=>t.id));
+ for(const [id,g]of trafficObjects)if(!active.has(id)){scene.remove(g);trafficObjects.delete(id);}
+ for(const t of sim.traffic){
+  let g=trafficObjects.get(t.id);
+  if(!g){g=simpleCar(scene,t.color);if(t.kind==='bus')g.scale.set(1.1,1.65,2);trafficObjects.set(t.id,g);}
+  g.position.set(t.x-sim.origin.x,0,t.z-sim.origin.z);g.rotation.y=t.h;
+ }
+ ground.position.set(sim.car.x-sim.origin.x,ground.position.y,sim.car.z-sim.origin.z);
 }
-const car=buildTruck(THREE);scene.add(car.root);
-const mon=buildMonster(THREE);mon.root.scale.setScalar(2.15);scene.add(mon.root);
+const car=buildTruck(THREE),mon=buildMonster(THREE);scene.add(car.root,mon.root);mon.root.scale.setScalar(2.15);
 mon.lime.color.setHex(0x95b84d);mon.belly.color.setHex(0xd3dc87);mon.pupil.color.setHex(0xff4a2b);
 const debrisMat=new THREE.MeshLambertMaterial({color:0xb9a38b});
-const particles=Array.from({length:110},()=>{const m=new THREE.Mesh(box,debrisMat);m.visible=false;scene.add(m);return {m,life:0,position:new THREE.Vector3(),velocity:new THREE.Vector3(),size:1};});
-let particleIndex=0,shake=0,lastCaptionTime=-100,caption='IT FOUND YOU.';
-function burst(s,lane,power=1){
-  const p=worldPoint(s,lane),rng=random(Math.round(s*100+sim.time*1000));
-  for(let i=0;i<20;i++){
-    const d=particles[particleIndex++%particles.length];d.life=1.2+rng();
-    d.position.set(p.x,1+rng()*4,p.z);d.velocity.set((rng()-.5)*14,4+rng()*9,(rng()-.5)*12);
-    d.size=(.18+rng()*.65)*power;d.m.visible=true;d.m.scale.setScalar(d.size);
+const particles=Array.from({length:90},()=>{const m=new THREE.Mesh(box,debrisMat);scene.add(m);m.visible=false;return {m,life:0,p:new THREE.Vector3(),v:new THREE.Vector3(),size:1};});
+let particleIndex=0,shake=0,caption='NO SAFE WAY OUT.',captionAt=0,eventShot='pursuit',eventShotUntil=0;
+const captions={swipe:'TOO CLOSE.',charge:'DON’T LOOK BACK.',leap:'MOVE. NOW.',intercept:'IT KNOWS THE WAY.',flank:'FROM THE ROOFTOPS.',smash:'NOWHERE TO HIDE.'};
+const shock=new THREE.Mesh(new THREE.RingGeometry(.82,1,40),new THREE.MeshBasicMaterial({color:0xffc879,transparent:true,opacity:0,side:THREE.DoubleSide}));
+shock.rotation.x=-Math.PI/2;scene.add(shock);let shockAt=-100,shockPoint={x:0,z:0};
+function events(){
+ for(const e of sim.drain()){
+  if(!capture)audio.play(e);
+  if(e.type==='attack'){caption=captions[e.attack];captionAt=sim.time;eventShot=['intercept','flank','leap'].includes(e.attack)?'reveal':e.attack==='smash'?'side':'pursuit';eventShotUntil=sim.time+3.6;}
+  if(e.type==='turn'){caption='TAKE THE NEXT TURN.';captionAt=sim.time;eventShot='corner';eventShotUntil=sim.time+2;}
+  if(e.type==='nearMiss'){caption='THAT WAS TOO CLOSE.';captionAt=sim.time;}
+  if(e.type==='reveal'){caption='IT’S ALREADY HERE.';captionAt=sim.time;eventShot='reveal';eventShotUntil=sim.time+2;}
+  if(e.type==='impact'||e.type==='collapse'||e.type==='traffic'){
+   shake=.5;shockAt=sim.time;shockPoint={x:e.x,z:e.z};
+   const rng=random(Math.round(sim.time*1000));
+   for(let i=0;i<20;i++){const d=particles[particleIndex++%particles.length];d.life=1+rng();d.p.set(e.x,1+rng()*3,e.z);d.v.set((rng()-.5)*16,6+rng()*8,(rng()-.5)*16);d.size=.2+rng()*.7;d.m.visible=true;}
+   if(e.type==='collapse'){const b=buildingObjects.get(e.id);if(b)b.fall=sim.time;}
   }
-}
-const shock=new THREE.Mesh(new THREE.RingGeometry(.8,1,40),new THREE.MeshBasicMaterial({color:0xffd071,transparent:true,opacity:0,side:THREE.DoubleSide}));
-shock.rotation.x=-Math.PI/2;scene.add(shock);let shockStart=-100,shockS=0,shockLane=0;
-const warning=new THREE.Mesh(new THREE.RingGeometry(.86,1,40),new THREE.MeshBasicMaterial({color:0xff7451,transparent:true,opacity:0,side:THREE.DoubleSide}));
-warning.rotation.x=-Math.PI/2;scene.add(warning);
-const captions={swipe:'TOO CLOSE.',charge:'DON’T LOOK BACK.',leap:'MOVE. NOW.',smash:'IT MAKES ITS OWN ROADS.'};
-const cameraPos=new THREE.Vector3(),cameraLook=new THREE.Vector3();let cameraInitialized=false,lastOrigin=0;
-const sightline=new THREE.Raycaster();
-let occludedFrames=0;
-const stats={frames:0,maxGeometries:0,visibleSamples:0,bothVisible:0,bothUnoccluded:0,maxOccludedFrames:0};
-let running=false,paused=false,muted=false;
-function processEvents(){
-  for(const event of sim.drain()){
-    if(!capture)audio.play(event);
-    if(event.type==='attack'){caption=captions[event.attack];lastCaptionTime=sim.time;}
-    if(event.type==='impact'){
-      burst(event.s,event.lane,event.attack==='leap'?1.5:1);shake=event.attack==='leap'?.6:.35;
-      shockStart=sim.time;shockS=event.s;shockLane=event.lane;
-    }
-    if(event.type==='collapse'){
-      const b=buildingObjects.get(event.id);if(b)b.fall=sim.time;
-      burst(event.s,event.lane,2);shake=.6;
-    }
-    if(event.type==='hit')shake=.45;
-    if(event.type==='traffic')burst(event.s,event.lane);
-  }
+  if(e.type==='ending'){caption=e.reason==='intercepted'?'NO WAY OUT.':'THE HUNT CONTINUES.';captionAt=sim.time;}
+ }
 }
 function actors(dt){
-  const c=sim.car,m=sim.monster,cp=worldPoint(c.s,c.lane,sim.origin),mp=worldPoint(m.s,m.lane,sim.origin);
-  car.root.position.set(cp.x,0,cp.z);car.root.rotation.y=Math.atan(road(c.s).dx)+Math.atan2(c.lateralSpeed,c.speed);
-  car.body.rotation.z=c.roll;car.body.rotation.x=c.boosting?-.045:Math.sin(sim.time*16)*.008;
-  for(const w of car.wheels){w.spin.rotation.x=c.s/.58;if(w.front)w.steer.rotation.y=-c.lateralSpeed*.07;}
-  for(const f of car.flames){f.visible=!!c.boosting;f.scale.set(1,1+Math.sin(sim.time*54)*.22,1);}
-  mon.root.position.set(mp.x,m.y,mp.z);
-  mon.root.rotation.y=Math.atan(road(m.s).dx)+clamp((c.lane-m.lane)*.025,-.35,.35);
-  mon.body.rotation.z=m.roll;mon.body.rotation.x=.12;
-  const gait=m.s*1.35,step=Math.sin(gait);
-  mon.legL.rotation.x=step*.7;mon.legR.rotation.x=-step*.7;
-  mon.armL.rotation.x=-step*.65-.35;mon.armR.rotation.x=step*.65-.35;
-  mon.armL.rotation.z=-.12;mon.armR.rotation.z=.12;
-  mon.body.position.y=Math.abs(Math.sin(gait))*.14;
-  if(sim.attack){
-    const a=sim.attack,age=sim.time-a.start;
-    if(a.type==='swipe'){mon.armL.rotation.x=-1.7;mon.armL.rotation.z=-.2-Math.sin(age*2.8)*1.1;}
-    if(a.type==='leap'){mon.armL.rotation.x=mon.armR.rotation.x=-2.4;mon.legL.rotation.x=.4;mon.legR.rotation.x=-.4;}
-    if(a.type==='charge'){mon.body.rotation.x=.38;mon.armL.rotation.x=mon.armR.rotation.x=-.9;}
-    if(a.type==='smash'){mon.armR.rotation.x=-2.5+Math.min(1,Math.max(0,age-.9)*3)*2.2;}
-  }
-  for(const b of buildingObjects.values())if(b.fall!==null){
-    const age=sim.time-b.fall;
-    b.g.position.y=-(Math.min(1,age/1.6)**2)*b.desc.height;
-    b.g.rotation.z=Math.min(age,1.6)*.12;
-    if(age>1.8)b.g.visible=false;
-  }
-  for(const d of particles)if(d.life>0){
-    d.life-=dt;d.velocity.y-=20*dt;d.position.addScaledVector(d.velocity,dt);
-    if(d.position.y<.2){d.position.y=.2;d.velocity.y*=-.28;d.velocity.x*=.8;d.velocity.z*=.8;}
-    d.m.position.set(d.position.x,d.position.y,d.position.z-sim.origin);
-    d.m.rotation.x+=dt*3;d.m.rotation.z+=dt*4;
-    d.m.scale.setScalar(d.size*Math.min(1,Math.max(0,d.life)*2));d.m.visible=d.life>0;
-  }
-  const shockAge=sim.time-shockStart,p=worldPoint(shockS,shockLane,sim.origin);
-  shock.position.set(p.x,.14,p.z);shock.scale.setScalar(1+Math.max(0,shockAge)*18);
-  shock.material.opacity=Math.max(0,1-shockAge/.7)*.65;
-  if(sim.attack&&!sim.attack.impact){
-    const a=sim.attack,q=worldPoint(c.s+8,a.targetLane,sim.origin);
-    warning.position.set(q.x,.1,q.z);warning.scale.setScalar(a.type==='leap'?4:2.4);
-    warning.material.opacity=.18+Math.sin(sim.time*18)*.08;
-  }else warning.material.opacity=0;
-  if(!capture)audio.update(c.speed);
+ const c=sim.car,m=sim.monster;
+ car.root.position.set(c.x-sim.origin.x,0,c.z-sim.origin.z);car.root.rotation.y=c.h+Math.atan2(c.lateralSpeed,c.speed)*.6;
+ car.body.rotation.z=c.roll-c.turn*.1;car.body.rotation.x=c.boosting?-.05:Math.sin(sim.time*16)*.01;
+ for(const w of car.wheels){w.spin.rotation.x=c.s/.58;if(w.front)w.steer.rotation.y=-c.lateralSpeed*.05-c.turn*.3;}
+ for(const f of car.flames){f.visible=c.boosting;f.scale.y=1+Math.sin(sim.time*54)*.2;}
+ mon.root.position.set(m.x-sim.origin.x,m.y,m.z-sim.origin.z);mon.root.rotation.y=m.h;
+ const step=Math.sin(m.s*1.35);mon.body.rotation.x=.15;mon.body.position.y=Math.abs(step)*.12;
+ mon.legL.rotation.x=step*.65;mon.legR.rotation.x=-step*.65;mon.armL.rotation.x=-step*.6-.3;mon.armR.rotation.x=step*.6-.3;
+ if(m.y>2){mon.armL.rotation.x=mon.armR.rotation.x=-2.3;mon.legL.rotation.x=.4;mon.legR.rotation.x=-.5;}
+ if(sim.attack?.type==='swipe')mon.armL.rotation.x=-1.8;
+ if(sim.attack?.type==='smash')mon.armR.rotation.x=-2.5+clamp((sim.time-sim.attack.start-.7)*2,0,2);
+ for(const b of buildingObjects.values())if(b.fall!==null){const age=sim.time-b.fall;b.g.position.y=-(Math.min(1,age/1.5)**2)*b.desc.height;b.g.visible=age<1.6;}
+ for(const d of particles)if(d.life>0){d.life-=dt;d.v.y-=20*dt;d.p.addScaledVector(d.v,dt);d.m.position.set(d.p.x-sim.origin.x,d.p.y,d.p.z-sim.origin.z);d.m.scale.setScalar(d.size*clamp(d.life*2,0,1));d.m.rotation.x+=dt*3;d.m.visible=d.life>0;}
+ const age=sim.time-shockAt;shock.position.set(shockPoint.x-sim.origin.x,.15,shockPoint.z-sim.origin.z);shock.scale.setScalar(1+Math.max(0,age)*16);shock.material.opacity=Math.max(0,1-age/.65)*.6;
+ if(!capture)audio.update(c.speed);
+}
+const sightline=new THREE.Raycaster(),lastCamera=new THREE.Vector3(),lastLook=new THREE.Vector3();
+let shot='pursuit',shotSince=-10,initialized=false,lastOrigin={x:0,z:0},previousClear=true,blockedFrames=0;
+const shotHistory=[...(history.shots||[])].slice(-4),shotLog=[];
+const stats={frames:0,maxGeometries:0,visibleSamples:0,bothVisible:0,bothUnoccluded:0,maxOccludedFrames:0,cameraCuts:0};
+function clearLine(p,from,facades){
+ const d=p.clone().sub(from);sightline.set(from,d.clone().normalize());sightline.far=d.length()-.1;
+ return sightline.intersectObjects(facades,false).length===0;
+}
+function frameSafe(points){
+ return points.every(p=>{const v=p.clone().project(camera);return Math.abs(v.x)<.89&&Math.abs(v.y)<.75&&v.z<1&&v.z>-1;});
 }
 function filmCamera(dt){
-  if(lastOrigin!==sim.origin){cameraPos.z-=sim.origin-lastOrigin;cameraLook.z-=sim.origin-lastOrigin;lastOrigin=sim.origin;}
-  const phase=(sim.time%config.duration)/config.duration,c=car.root.position,m=mon.root.position;
-  let side=4,height=13,lead=32,shot='01 / CONTACT';
-  if(phase>.22&&phase<.41){side=-4;height=12;lead=33;shot='02 / PURSUIT';}
-  else if(phase>=.41&&phase<.62){side=5;height=16;lead=37;shot='03 / IMPACT';}
-  else if(phase>=.62&&phase<.82){side=-3;height=20;lead=42;shot='04 / NO WAY OUT';}
-  else if(phase>=.82){side=3;height=13;lead=33;shot='05 / LAST CHANCE';}
-  const gap=c.z-m.z;
-  // A front three-quarter camera keeps the car foreground and its pursuer readable.
-  const forward=worldPoint(sim.car.s+lead,side,sim.origin);
-  const target=new THREE.Vector3(forward.x,c.y+height,forward.z);
-  const look=new THREE.Vector3((c.x+m.x)*.5,4.0+(m.y*.28),c.z-Math.min(12,gap*.45));
-  if(!cameraInitialized){cameraPos.copy(target);cameraLook.copy(look);cameraInitialized=true;}
-  const smoothing=1-Math.exp(-dt*3.4);cameraPos.lerp(target,smoothing);cameraLook.lerp(look,smoothing);
-  shake=Math.max(0,shake-dt*1.5);
-  camera.position.copy(cameraPos);camera.position.x+=Math.sin(sim.time*71)*shake*.4;camera.position.y+=Math.cos(sim.time*57)*shake*.3;
-  camera.lookAt(cameraLook);camera.updateMatrixWorld();
-  document.getElementById('chapter').textContent=shot;
-  if(phase>.94)caption=config.ending==='escape'?'STILL RUNNING.':'IT’S RIGHT BEHIND YOU.';
-  else if(sim.time-lastCaptionTime>4)caption=phase<.1?'IT FOUND YOU.':phase<.45?'THERE IS NO SAFE STREET.':'KEEP. MOVING.';
-  document.getElementById('caption').textContent=caption;
-  document.getElementById('distance').textContent=Math.floor(sim.metrics.distance).toString().padStart(3,'0')+' M';
-  document.getElementById('gap').textContent=(gap<9?'DANGER / ':gap<18?'PURSUER / ':'DISTANCE / ')+Math.round(gap)+' M';
-  document.getElementById('progress').style.transform='scaleX('+phase+')';
-  sun.position.set(c.x-20,40,c.z+10);sun.target.position.copy(c);
+ const c=car.root.position,m=mon.root.position,forward=new THREE.Vector3(Math.sin(sim.car.h),0,Math.cos(sim.car.h)),right=new THREE.Vector3(forward.z,0,-forward.x);
+ const cp=c.clone().add(new THREE.Vector3(0,2,0)),mp=m.clone().add(new THREE.Vector3(0,5,0));
+ const points=[cp,mp,m.clone().add(new THREE.Vector3(0,10,0)),c.clone()];
+ const look=cp.clone().add(mp).multiplyScalar(.5);
+ const facades=[...buildingObjects.values()].filter(b=>b.g.visible).map(b=>b.facade);
+ let desired=sim.time<eventShotUntil?eventShot:Math.abs(sim.car.turn)>.2?'corner':sim.monster.s>sim.car.s?'reveal':sim.metrics.nearMisses&&sim.time-captionAt<1.5?'rear':'pursuit';
+ if(sim.time-shotSince>5&&desired===shot&&shot==='pursuit')desired=shotHistory.at(-1)==='side'?'rear':'side';
+ let cut=!initialized;
+ if(desired!==shot&&sim.time-shotSince>2.4){shot=desired;shotSince=sim.time;cut=true;}
+ const presets={pursuit:[1,.12,.48],rear:[-1,.16,.65],side:[.4,1,.9],corner:[.5,.15,1.8],reveal:[1,-.1,1.15]};
+ const preset=presets[shot],radius=Math.max(11,...points.map(p=>p.distanceTo(look)))+3;
+ const halfFov=Math.atan(Math.tan(camera.fov*Math.PI/360)*Math.min(1,camera.aspect));
+ const fit=radius/Math.sin(halfFov)*1.05;
+ let target,valid=false;
+ // Prefer a readable event-specific shot, then raise the camera above blocking facades.
+ for(const lift of [1,1.7,3,6,15]){
+  const direction=forward.clone().multiplyScalar(preset[0]).addScaledVector(right,preset[1]);direction.y=preset[2]*lift;direction.normalize();
+  target=look.clone().addScaledVector(direction,fit);
+  camera.position.copy(target);camera.lookAt(look);camera.updateMatrixWorld();
+  if(frameSafe(points)&&clearLine(cp,target,facades)&&clearLine(mp,target,facades)){valid=true;break;}
+ }
+ if(lastOrigin.x!==sim.origin.x||lastOrigin.z!==sim.origin.z){
+  const shift=new THREE.Vector3(sim.origin.x-lastOrigin.x,0,sim.origin.z-lastOrigin.z);lastCamera.sub(shift);lastLook.sub(shift);lastOrigin={...sim.origin};
+ }
+ if(initialized&&!cut&&valid){
+  const smooth=1-Math.exp(-dt*5),p=lastCamera.clone().lerp(target,smooth),l=lastLook.clone().lerp(look,smooth);
+  camera.position.copy(p);camera.lookAt(l);camera.updateMatrixWorld();
+  if(frameSafe(points)&&clearLine(cp,p,facades)&&clearLine(mp,p,facades)){target=p;look.copy(l);}else cut=true;
+ }
+ if(cut){stats.cameraCuts++;shotLog.push({time:sim.time,shot});if(shotLog.length>150)shotLog.shift();shotHistory.push(shot);if(shotHistory.length>4)shotHistory.shift();}
+ lastCamera.copy(target);lastLook.copy(look);initialized=true;
+ camera.position.copy(target);camera.lookAt(look);camera.updateMatrixWorld();
+ const framed=frameSafe(points),clear=clearLine(cp,target,facades)&&clearLine(mp,target,facades);
+ stats.visibleSamples++;if(framed)stats.bothVisible++;if(clear)stats.bothUnoccluded++;
+ blockedFrames=clear?0:blockedFrames+1;stats.maxOccludedFrames=Math.max(stats.maxOccludedFrames,blockedFrames);
+ shake=Math.max(0,shake-dt*1.5);
+ document.getElementById('chapter').textContent=shot==='corner'?'CHANGE OF PLAN':shot==='reveal'?'INTERCEPTION':shot==='rear'?'FULL THROTTLE':'THE PURSUIT';
+ if(sim.time-captionAt>4)caption=sim.car.boosting?'KEEP. MOVING.':'NO SAFE WAY OUT.';
+ document.getElementById('caption').textContent=caption;
+ document.getElementById('distance').textContent=Math.floor(sim.metrics.distance)+' M';
+ document.getElementById('gap').textContent=(sim.monster.s>sim.car.s?'THREAT AHEAD / ':'PURSUER / ')+Math.round(distance(sim.car,sim.monster))+' M';
+ document.getElementById('progress').style.transform='scaleX('+Math.min(1,sim.time/config.duration)+')';
+ sun.position.set(c.x-25,65,c.z+25);sun.target.position.copy(c);
 }
 function render(dt,draw=true){
-  syncCity();processEvents();actors(dt);filmCamera(dt);
-  if(draw)renderer.render(scene,camera);stats.frames++;stats.maxGeometries=Math.max(stats.maxGeometries,renderer.info.memory.geometries);
-  // Check actual building occlusion as well as whether actor centers fit the frame.
-  scene.updateMatrixWorld(true);
-  const a=car.root.position.clone().add(new THREE.Vector3(0,1.5,0));
-  const b=mon.root.position.clone().add(new THREE.Vector3(0,5,0));
-  const facades=[...buildingObjects.values()].filter(o=>o.g.visible).map(o=>o.facade);
-  const clear=p=>{
-    const direction=p.clone().sub(camera.position),distance=direction.length();
-    sightline.set(camera.position,direction.normalize());sightline.far=distance-.1;
-    return sightline.intersectObjects(facades,false).length===0;
-  };
-  const unoccluded=clear(a)&&clear(b);
-  occludedFrames=unoccluded?0:occludedFrames+1;
-  stats.maxOccludedFrames=Math.max(stats.maxOccludedFrames,occludedFrames);
-  if(unoccluded)stats.bothUnoccluded++;
-  a.project(camera);b.project(camera);
-  const visible=p=>Math.abs(p.x)<.94&&Math.abs(p.y)<.83&&p.z<1&&p.z>-1;
-  stats.visibleSamples++;if(visible(a)&&visible(b))stats.bothVisible++;
+ syncCity();events();actors(dt);scene.updateMatrixWorld(true);filmCamera(dt);
+ if(draw)renderer.render(scene,camera);
+ stats.frames++;stats.maxGeometries=Math.max(stats.maxGeometries,renderer.info.memory.geometries);
 }
 function advance(frames=1,drawEvery=1){
-  if(!Number.isInteger(frames)||frames<1||frames>1800)throw Error('Invalid frame count.');
-  for(let frame=0;frame<frames;frame++){sim.step();sim.step();render(1/30,(frame+1)%drawEvery===0);}
-  return {time:sim.time,speed:sim.car.speed,health:sim.car.health,gap:sim.car.s-sim.monster.s,
-    chunks:sim.chunks.size,geometries:renderer.info.memory.geometries};
+ if(!Number.isInteger(frames)||frames<1||frames>1800)throw Error('Invalid frame count.');
+ for(let i=0;i<frames;i++){sim.step();sim.step();render(1/30,(i+1)%drawEvery===0);}
+ return {time:sim.time,speed:sim.car.speed,health:sim.car.health,finished:sim.finished,gap:distance(sim.car,sim.monster),chunks:sim.chunks.size,geometries:renderer.info.memory.geometries};
 }
-window.chase={
-  ready:true,config,advance,
-  report:()=>({config,snapshot:sim.snapshot(),events:sim.events,stats:{...stats,bothVisibleRatio:stats.bothVisible/Math.max(1,stats.visibleSamples),bothUnoccludedRatio:stats.bothUnoccluded/Math.max(1,stats.visibleSamples)}}),
-  renderInitial:()=>render(0)
-};
+window.chase={ready:true,config,advance,report:()=>({config,snapshot:sim.snapshot(),events:sim.events,shots:shotLog,history:{...sim.history(),shots:shotHistory},stats:{...stats,bothVisibleRatio:stats.bothVisible/Math.max(1,stats.visibleSamples),bothUnoccludedRatio:stats.bothUnoccluded/Math.max(1,stats.visibleSamples)}})};
 render(0);
-document.getElementById('start').addEventListener('click',async()=>{
-  document.getElementById('welcome').hidden=true;
-  document.getElementById('controls').style.display='flex';
-  await audio.start();running=true;
-});
+let running=false,paused=false,muted=false,last=null,acc=0,saved=false;
+document.getElementById('start').addEventListener('click',async()=>{document.getElementById('welcome').hidden=true;document.getElementById('controls').style.display='flex';await audio.start();running=true;});
 document.getElementById('pause').addEventListener('click',()=>{paused=!paused;document.getElementById('pause').textContent=paused?'Resume':'Pause';if(audio.ctx)paused?audio.ctx.suspend():audio.ctx.resume();});
 document.getElementById('mute').addEventListener('click',()=>{muted=!muted;audio.mute(muted);document.getElementById('mute').textContent=muted?'Sound off':'Sound on';});
-let last=null,acc=0;
 function loop(now){
-  if(last===null)last=now;
-  const dt=Math.min(.1,(now-last)/1000);last=now;
-  if(running&&!paused&&!document.hidden){
-    acc+=dt;let steps=0;
-    while(acc>=FIXED_DT&&steps<6){sim.step();acc-=FIXED_DT;steps++;}
-    render(steps*FIXED_DT);
-  }else acc=0;
-  requestAnimationFrame(loop);
+ if(last===null)last=now;const dt=Math.min(.1,(now-last)/1000);last=now;
+ if(running&&!paused&&!document.hidden){acc+=dt;let steps=0;while(acc>=FIXED_DT&&steps<6){sim.step();acc-=FIXED_DT;steps++;}render(steps*FIXED_DT);
+  if(sim.finished&&!saved){saved=true;try{localStorage.setItem('monster-director-history',JSON.stringify(window.chase.report().history));}catch{}}
+ }else acc=0;
+ requestAnimationFrame(loop);
 }
 if(!capture)requestAnimationFrame(loop);
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);render(0);});

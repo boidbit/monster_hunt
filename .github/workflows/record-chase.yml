@@ -3,23 +3,22 @@ on:
   workflow_dispatch:
     inputs:
       duration:
-        description: Clip duration in seconds (30–60)
-        default: '45'
+        description: Maximum clip length (30–60 seconds; director chooses an ending)
+        default: '60'
         required: true
       seed:
-        description: City and driving seed (0–4294967295)
-        default: '42'
-        required: true
+        description: auto for a new episode, or a number to reproduce a seed
+        default: auto
       intensity:
         description: Pursuit intensity
         type: choice
         options: [savage, intense]
         default: savage
       ending:
-        description: Final shot
+        description: Preferred ending (uses the time limit if no opportunity appears)
         type: choice
-        options: [escape, cliffhanger]
-        default: escape
+        options: [auto, escape, cliffhanger]
+        default: auto
       format:
         description: Video framing
         type: choice
@@ -27,15 +26,12 @@ on:
         default: portrait
   push:
     branches: [codex/monster-chase-director]
-    paths:
-      - 'chase/**'
-      - 'tools/render/**'
-      - '.github/workflows/record-chase.yml'
+    paths: ['chase/**', 'tools/render/**', '.github/workflows/record-chase.yml']
 permissions:
   contents: read
 concurrency:
   group: monster-chase-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   record:
     runs-on: ubuntu-24.04
@@ -44,25 +40,47 @@ jobs:
       CHASE_DURATION: ${{ inputs.duration || '45' }}
       CHASE_SEED: ${{ inputs.seed || '42' }}
       CHASE_INTENSITY: ${{ inputs.intensity || 'savage' }}
-      CHASE_ENDING: ${{ inputs.ending || 'escape' }}
+      CHASE_ENDING: ${{ inputs.ending || 'auto' }}
       CHASE_FORMAT: ${{ inputs.format || 'portrait' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Validate simulation and audio
+      - name: Validate routes, adaptive attacks, traffic, history and audio
         run: node --test tools/render/core.test.mjs
-      - name: Install recording dependencies on runner
+      - name: Restore previous episode memory
+        if: github.event_name == 'workflow_dispatch' && inputs.seed == 'auto'
+        uses: actions/cache/restore@v4
+        with:
+          path: .director-history
+          key: director-v2-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: director-v2-${{ github.ref_name }}-
+      - name: Install cloud recording tools
         run: |
           npm install --prefix tools/render --ignore-scripts --no-audit --no-fund
           node tools/render/node_modules/playwright/cli.js install --with-deps chromium
           if ! command -v ffmpeg >/dev/null; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
-      - name: Check camera, streaming and browser errors
+      - name: Check portrait camera and streaming
         run: node tools/render/record.mjs --smoke
-      - name: Render video and synchronized audio
+        env:
+          CHASE_SEED: '42'
+          CHASE_FORMAT: portrait
+      - name: Check alternate seed and landscape camera
+        run: node tools/render/record.mjs --smoke
+        env:
+          CHASE_SEED: '99'
+          CHASE_FORMAT: landscape
+      - name: Direct and record the episode
         run: node tools/render/record.mjs
+      - name: Remember this episode
+        if: github.event_name == 'workflow_dispatch' && inputs.seed == 'auto'
+        uses: actions/cache/save@v4
+        with:
+          path: .director-history
+          key: director-v2-${{ github.ref_name }}-${{ github.run_id }}
       - name: Upload video and review images
+        id: video
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -73,3 +91,12 @@ jobs:
             artifacts/*.mp4
             artifacts/*.jpg
             artifacts/*report.json
+      - name: Add download instructions
+        if: success()
+        env:
+          ARTIFACT_URL: ${{ steps.video.outputs.artifact-url }}
+        run: |
+          echo "### Your Monster Hunt episode" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Download the video ZIP]($ARTIFACT_URL), then open monster-chase.mp4." >> "$GITHUB_STEP_SUMMARY"
+          echo "Sign in to GitHub to download. The artifact also appears at the bottom of this run and expires after 14 days." >> "$GITHUB_STEP_SUMMARY"
+          echo "Seed, actual duration, events and camera shots are saved in report.json." >> "$GITHUB_STEP_SUMMARY"
