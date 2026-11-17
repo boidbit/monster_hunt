@@ -38,12 +38,15 @@ try{
   const frames=Math.round(config.duration*30),thumbs=[];
   if(smoke){
     const samples=[];
-    for(let i=0;i<frames;i++){
-      const state=await page.evaluate(()=>window.chase.advance());
-      if(i%30===0)samples.push(state);
-      if(i===Math.round(frames/2))await page.screenshot({path:resolve(output,'smoke.jpg'),type:'jpeg',quality:85});
+    for(let i=0;i<frames;i+=30){
+      const count=Math.min(30,frames-i);
+      const state=await page.evaluate(n=>window.chase.advance(n,n),count);
+      samples.push(state);
+      if(i<=frames/2 && i+count>frames/2)await page.screenshot({path:resolve(output,'smoke.jpg'),type:'jpeg',quality:85});
     }
     const report=await page.evaluate(()=>window.chase.report());
+    await writeFile(resolve(output,'smoke-report.json'),JSON.stringify({...report,samples,errors},null,2));
+    console.log('SMOKE_REPORT '+JSON.stringify({metrics:report.snapshot.metrics,stats:report.stats,errors}));
     const first=samples.slice(8,18).map(s=>s.geometries),last=samples.slice(-10).map(s=>s.geometries);
     assert.ok(Math.max(...last)<=Math.max(...first)+12,'Geometry count grows after chunks are recycled.');
     assert.ok(report.stats.bothVisibleRatio>.85,'Actors leave the camera too frequently.');

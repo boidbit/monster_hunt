@@ -205,15 +205,16 @@ function actors(dt){
 function filmCamera(dt){
   if(lastOrigin!==sim.origin){cameraPos.z-=sim.origin-lastOrigin;cameraLook.z-=sim.origin-lastOrigin;lastOrigin=sim.origin;}
   const phase=(sim.time%config.duration)/config.duration,c=car.root.position,m=mon.root.position;
-  let side=10,height=12,lead=29,shot='01 / CONTACT';
-  if(phase>.22&&phase<.41){side=-18;height=10;lead=22;shot='02 / PURSUIT';}
-  else if(phase>=.41&&phase<.62){side=21;height=13;lead=23;shot='03 / IMPACT';}
-  else if(phase>=.62&&phase<.82){side=-24;height=19;lead=29;shot='04 / NO WAY OUT';}
-  else if(phase>=.82){side=8;height=11;lead=29;shot='05 / LAST CHANCE';}
+  let side=4,height=13,lead=32,shot='01 / CONTACT';
+  if(phase>.22&&phase<.41){side=-4;height=12;lead=33;shot='02 / PURSUIT';}
+  else if(phase>=.41&&phase<.62){side=5;height=16;lead=37;shot='03 / IMPACT';}
+  else if(phase>=.62&&phase<.82){side=-3;height=20;lead=42;shot='04 / NO WAY OUT';}
+  else if(phase>=.82){side=3;height=13;lead=33;shot='05 / LAST CHANCE';}
   const gap=c.z-m.z;
   // A front three-quarter camera keeps the car foreground and its pursuer readable.
-  const target=new THREE.Vector3(c.x+side,c.y+height,c.z+lead);
-  const look=new THREE.Vector3((c.x+m.x)*.5,3.0+(m.y*.12),c.z-Math.min(12,gap*.45));
+  const forward=worldPoint(sim.car.s+lead,side,sim.origin);
+  const target=new THREE.Vector3(forward.x,c.y+height,forward.z);
+  const look=new THREE.Vector3((c.x+m.x)*.5,4.0+(m.y*.28),c.z-Math.min(12,gap*.45));
   if(!cameraInitialized){cameraPos.copy(target);cameraLook.copy(look);cameraInitialized=true;}
   const smoothing=1-Math.exp(-dt*3.4);cameraPos.lerp(target,smoothing);cameraLook.lerp(look,smoothing);
   shake=Math.max(0,shake-dt*1.5);
@@ -228,17 +229,17 @@ function filmCamera(dt){
   document.getElementById('progress').style.transform='scaleX('+phase+')';
   sun.position.set(c.x-20,40,c.z+10);sun.target.position.copy(c);
 }
-function render(dt){
+function render(dt,draw=true){
   syncCity();processEvents();actors(dt);filmCamera(dt);
-  renderer.render(scene,camera);stats.frames++;stats.maxGeometries=Math.max(stats.maxGeometries,renderer.info.memory.geometries);
+  if(draw)renderer.render(scene,camera);stats.frames++;stats.maxGeometries=Math.max(stats.maxGeometries,renderer.info.memory.geometries);
   const a=car.root.position.clone().add(new THREE.Vector3(0,1.5,0)).project(camera);
   const b=mon.root.position.clone().add(new THREE.Vector3(0,5,0)).project(camera);
   const visible=p=>Math.abs(p.x)<.94&&Math.abs(p.y)<.83&&p.z<1&&p.z>-1;
   stats.visibleSamples++;if(visible(a)&&visible(b))stats.bothVisible++;
 }
-function advance(frames=1){
+function advance(frames=1,drawEvery=1){
   if(!Number.isInteger(frames)||frames<1||frames>1800)throw Error('Invalid frame count.');
-  for(let frame=0;frame<frames;frame++){sim.step();sim.step();render(1/30);}
+  for(let frame=0;frame<frames;frame++){sim.step();sim.step();render(1/30,(frame+1)%drawEvery===0);}
   return {time:sim.time,speed:sim.car.speed,health:sim.car.health,gap:sim.car.s-sim.monster.s,
     chunks:sim.chunks.size,geometries:renderer.info.memory.geometries};
 }
