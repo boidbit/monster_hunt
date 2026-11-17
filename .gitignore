@@ -4,3 +4,7 @@ android/app/build/
 android/.gradle/
 android/build/
 android/local.properties
+
+# Cloud-rendered footage and local recording dependencies
+artifacts/
+tools/render/node_modules/

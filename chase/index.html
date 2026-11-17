@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Monster Hunt — The Chase</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<canvas id="game" aria-label="A monster pursuing an armored truck through an endless city"></canvas>
+<div id="hud" aria-hidden="true">
+  <div class="mast"><div><span class="eyebrow">BOIDBIT PICTURES</span><strong>MONSTER HUNT<span>THE CHASE</span></strong></div><span class="live"><i></i> PURSUIT</span></div>
+  <div class="bottom"><span id="chapter">01 / CONTACT</span><h1 id="caption">IT FOUND YOU.</h1><div class="stats"><span id="distance">000 M</span><span id="gap">THREAT CLOSE</span></div><div class="track"><div id="progress"></div></div></div>
+</div>
+<section id="welcome">
+  <div class="intro"><span class="eyebrow">AN ENDLESS PURSUIT</span><h1>IT DOESN’T<br>GIVE UP.</h1><p>One truck. A city that never ends.<br>A monster that takes every shortcut.</p>
+  <button id="start">START THE CHASE <span>↗</span></button><p class="hint">The director drives. You watch the escape.</p>
+  <a href="../index.html">Play the original Monster Hunt</a></div>
+</section>
+<div id="controls"><button id="pause" aria-label="Pause chase">Pause</button><button id="mute" aria-label="Mute sound">Sound on</button></div>
+<div id="error" hidden></div>
+<script type="module" src="./scene.mjs"></script>
+</body>
+</html>

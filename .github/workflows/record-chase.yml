@@ -1,0 +1,75 @@
+name: Record Monster Chase
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Clip duration in seconds (30–60)
+        default: '45'
+        required: true
+      seed:
+        description: City and driving seed (0–4294967295)
+        default: '42'
+        required: true
+      intensity:
+        description: Pursuit intensity
+        type: choice
+        options: [savage, intense]
+        default: savage
+      ending:
+        description: Final shot
+        type: choice
+        options: [escape, cliffhanger]
+        default: escape
+      format:
+        description: Video framing
+        type: choice
+        options: [portrait, landscape]
+        default: portrait
+  push:
+    branches: [codex/monster-chase-director]
+    paths:
+      - 'chase/**'
+      - 'tools/render/**'
+      - '.github/workflows/record-chase.yml'
+permissions:
+  contents: read
+concurrency:
+  group: monster-chase-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CHASE_DURATION: ${{ inputs.duration || '45' }}
+      CHASE_SEED: ${{ inputs.seed || '42' }}
+      CHASE_INTENSITY: ${{ inputs.intensity || 'savage' }}
+      CHASE_ENDING: ${{ inputs.ending || 'escape' }}
+      CHASE_FORMAT: ${{ inputs.format || 'portrait' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate simulation and audio
+        run: node --test tools/render/core.test.mjs
+      - name: Install recording dependencies on runner
+        run: |
+          npm install --prefix tools/render --ignore-scripts --no-audit --no-fund
+          node tools/render/node_modules/playwright/cli.js install --with-deps chromium
+          if ! command -v ffmpeg >/dev/null; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
+      - name: Check camera, streaming and browser errors
+        run: node tools/render/record.mjs --smoke
+      - name: Render video and synchronized audio
+        run: node tools/render/record.mjs
+      - name: Upload video and review images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monster-chase-${{ github.run_number }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            artifacts/*.mp4
+            artifacts/*.jpg
+            artifacts/*report.json
