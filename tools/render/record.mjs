@@ -50,6 +50,8 @@ try{
     const first=samples.slice(8,18).map(s=>s.geometries),last=samples.slice(-10).map(s=>s.geometries);
     assert.ok(Math.max(...last)<=Math.max(...first)+12,'Geometry count grows after chunks are recycled.');
     assert.ok(report.stats.bothVisibleRatio>.85,'Actors leave the camera too frequently.');
+    assert.ok(report.stats.bothUnoccludedRatio>.98,'Buildings obscure the chase too frequently.');
+    assert.ok(report.stats.maxOccludedFrames<=12,'A building hides an actor for over 0.4 seconds.');
     assert.equal(errors.length,0,errors.join('\n'));
     await writeFile(resolve(output,'smoke-report.json'),JSON.stringify({...report,samples,errors},null,2));
     console.log('SMOKE_REPORT '+JSON.stringify({metrics:report.snapshot.metrics,stats:report.stats,errors}));
@@ -68,6 +70,8 @@ try{
     const report=await page.evaluate(()=>window.chase.report());
     assert.equal(errors.length,0,errors.join('\n'));
     assert.ok(report.stats.bothVisibleRatio>.85,'Actors leave the camera too frequently.');
+    assert.ok(report.stats.bothUnoccludedRatio>.98,'Buildings obscure the chase too frequently.');
+    assert.ok(report.stats.maxOccludedFrames<=12,'A building hides an actor for over 0.4 seconds.');
     assert.ok(telemetry.every(f=>f.health>0),'The car did not survive the directed take.');
     assert.equal(new Set(report.events.filter(e=>e.type==='attack').map(e=>e.attack)).size,4);
     const samples=renderAudio(config.duration,report.events,telemetry),rate=48000;

@@ -140,7 +140,9 @@ const warning=new THREE.Mesh(new THREE.RingGeometry(.86,1,40),new THREE.MeshBasi
 warning.rotation.x=-Math.PI/2;scene.add(warning);
 const captions={swipe:'TOO CLOSE.',charge:'DON’T LOOK BACK.',leap:'MOVE. NOW.',smash:'IT MAKES ITS OWN ROADS.'};
 const cameraPos=new THREE.Vector3(),cameraLook=new THREE.Vector3();let cameraInitialized=false,lastOrigin=0;
-const stats={frames:0,maxGeometries:0,visibleSamples:0,bothVisible:0};
+const sightline=new THREE.Raycaster();
+let occludedFrames=0;
+const stats={frames:0,maxGeometries:0,visibleSamples:0,bothVisible:0,bothUnoccluded:0,maxOccludedFrames:0};
 let running=false,paused=false,muted=false;
 function processEvents(){
   for(const event of sim.drain()){
@@ -232,8 +234,21 @@ function filmCamera(dt){
 function render(dt,draw=true){
   syncCity();processEvents();actors(dt);filmCamera(dt);
   if(draw)renderer.render(scene,camera);stats.frames++;stats.maxGeometries=Math.max(stats.maxGeometries,renderer.info.memory.geometries);
-  const a=car.root.position.clone().add(new THREE.Vector3(0,1.5,0)).project(camera);
-  const b=mon.root.position.clone().add(new THREE.Vector3(0,5,0)).project(camera);
+  // Check actual building occlusion as well as whether actor centers fit the frame.
+  scene.updateMatrixWorld(true);
+  const a=car.root.position.clone().add(new THREE.Vector3(0,1.5,0));
+  const b=mon.root.position.clone().add(new THREE.Vector3(0,5,0));
+  const facades=[...buildingObjects.values()].filter(o=>o.g.visible).map(o=>o.facade);
+  const clear=p=>{
+    const direction=p.clone().sub(camera.position),distance=direction.length();
+    sightline.set(camera.position,direction.normalize());sightline.far=distance-.1;
+    return sightline.intersectObjects(facades,false).length===0;
+  };
+  const unoccluded=clear(a)&&clear(b);
+  occludedFrames=unoccluded?0:occludedFrames+1;
+  stats.maxOccludedFrames=Math.max(stats.maxOccludedFrames,occludedFrames);
+  if(unoccluded)stats.bothUnoccluded++;
+  a.project(camera);b.project(camera);
   const visible=p=>Math.abs(p.x)<.94&&Math.abs(p.y)<.83&&p.z<1&&p.z>-1;
   stats.visibleSamples++;if(visible(a)&&visible(b))stats.bothVisible++;
 }
@@ -245,7 +260,7 @@ function advance(frames=1,drawEvery=1){
 }
 window.chase={
   ready:true,config,advance,
-  report:()=>({config,snapshot:sim.snapshot(),events:sim.events,stats:{...stats,bothVisibleRatio:stats.bothVisible/Math.max(1,stats.visibleSamples)}}),
+  report:()=>({config,snapshot:sim.snapshot(),events:sim.events,stats:{...stats,bothVisibleRatio:stats.bothVisible/Math.max(1,stats.visibleSamples),bothUnoccludedRatio:stats.bothUnoccluded/Math.max(1,stats.visibleSamples)}}),
   renderInitial:()=>render(0)
 };
 render(0);

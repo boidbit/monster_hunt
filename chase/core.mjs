@@ -156,7 +156,8 @@ export class Chase {
     mon.y = 0; mon.roll = 0;
     if (this.attack) {
       const a = this.attack, elapsed = this.time - a.start;
-      desiredLane = a.type === 'smash' ? (a.fromLane < 0 ? -16 : 16) : a.targetLane;
+      // Stay at the kerb and reach into the facade; entering a building hides the pursuer.
+      desiredLane = a.type === 'smash' ? (a.fromLane < 0 ? -8 : 8) : a.targetLane;
       gapTarget = a.type === 'charge' ? 5.2 : a.type === 'swipe' ? 6.5 : a.type === 'leap' ? 8 : 14;
       if (a.type === 'leap' && elapsed > .6 && elapsed < 2.1) mon.y = Math.sin((elapsed - .6) / 1.5 * Math.PI) * 9;
       if (a.type === 'swipe') mon.roll = Math.sin(clamp((elapsed - .5) / 1.2, 0, 1) * Math.PI) * .25;
