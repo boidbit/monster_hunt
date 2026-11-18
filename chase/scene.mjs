@@ -194,11 +194,18 @@ function filmCamera(dt){
  const presets={rear:[-12,1.8,4.6],ramp:[-5,12,4],corner:[12,5,3],monster:[22,2.7,2.7],bonnet:[0,0,2.4],roof:[4,30,9]};
  const [lead,side,height]=presets[shot];let target=focus.clone().addScaledVector(forward,lead).addScaledVector(right,side);
  target.y=shot==='roof'?focus.y+height:shot==='ramp'?height:shot==='monster'?m.y+height:height;
- if(shot==='bonnet'){target.copy(cp).addScaledVector(forward,2.6);target.y+=.7;}
+ if(shot==='bonnet'){target.copy(cp).addScaledVector(forward,3.8);target.y+=1.6;}
  let look=focus.clone();if(shot==='rear')look.addScaledVector(forward,3);
- const sight=(p)=>clearLine(focus,p,facades)&&clearLine(p,focus,facades);
+ const other=monsterShot?c:m;
+ const bounds=new THREE.Box3(new THREE.Vector3(other.x-(monsterShot?2:3.6),other.y+.1,other.z-(monsterShot?2.8:3.6)),new THREE.Vector3(other.x+(monsterShot?2:3.6),other.y+(monsterShot?3.3:13),other.z+(monsterShot?2.8:3.6)));
+ const sight=(p)=>{
+  if(p.distanceTo(focus)<(monsterShot?11:5))return false;
+  const ray=new THREE.Ray(p.clone(),focus.clone().sub(p).normalize());
+  const crossing=ray.intersectBox(bounds,new THREE.Vector3());
+  return !bounds.containsPoint(p)&&(!crossing||crossing.distanceTo(p)>=focus.distanceTo(p)-.4)&&clearLine(focus,p,facades)&&clearLine(p,focus,facades);
+ };
  if(!sight(target)){
-  for(const [fw,sd,up] of [[lead,-side,height],[12,0,3],[-12,0,4],[0,8,5],[0,-8,5],[0,0,18]]){
+  for(const [fw,sd,up] of [[lead,-side,height],[12,0,3],[-12,0,4],[0,8,5],[0,-8,5],[12,6,6],[-14,-4,5],[0,0,18],[0,0,32]]){
    const alt=focus.clone().addScaledVector(forward,fw).addScaledVector(right,sd);alt.y=focus.y+up;
    if(sight(alt)){target=alt;look=focus.clone();break;}
   }
