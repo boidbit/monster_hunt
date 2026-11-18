@@ -24,7 +24,10 @@ const angle=(a,b)=>Math.atan2(b.x-a.x,b.z-a.z);
 const unit=a=>({x:Math.sin(a),z:Math.cos(a)});
 export class Chase{
  constructor(input={}){
-  this.config=options(input);this.rng=random(this.config.seed);this.time=0;this.tick=0;this.events=[];this.pending=[];
+  this.config=options(input);this.rng=random(this.config.seed);
+  const memory=JSON.stringify([input.history?.attacks??[],input.history?.turns??[]]);
+  const salt=Array.from(memory).reduce((hash,ch)=>Math.imul(hash^ch.charCodeAt(0),16777619)>>>0,2166136261);
+  this.tactics=random(this.config.seed^salt^(this.config.intensity==='savage'?0x8af32715:0x31c040ab));this.time=0;this.tick=0;this.events=[];this.pending=[];
   this.route=[{x:0,z:-GRID},{x:0,z:0},{x:0,z:GRID}];this.routeBase=-1;this.visits=new Map();
   this.recentAttacks=[...(input.history?.attacks||[])].slice(-4);this.recentTurns=[...(input.history?.turns||[])].slice(-4);
   this.chunks=new Map();this.traffic=[];this.origin={x:0,z:0};this.nextTrafficId=0;
@@ -103,7 +106,7 @@ export class Chase{
   const m=this.monster,c=this.car;
   this.attack={type,start:this.time,duration:type==='intercept'?4.2:type==='flank'?3.4:2.5,targetLane:c.lane,impact:false,from:{x:m.x,z:m.z},fromS:m.s};
   if(type==='intercept'||type==='flank'){
-   const targetS=c.s+(type==='intercept'?82:45),target=this.point(targetS,type==='flank'?-5:0);
+   const targetS=c.s+(type==='intercept'?Math.max(86,c.speed*2.6+27):45),target=this.point(targetS,type==='flank'?-5:0);
    Object.assign(this.attack,{flight:true,targetS,target,travel:type==='intercept'?2.6:2.1});
    this.metrics.interceptions++;
   }
@@ -116,7 +119,8 @@ export class Chase{
   const weights={swipe:gap<17?3:.2,charge:gap>12?2.5:1,leap:gap<28?2:1,intercept:turn?5:2,flank:traffic>2?3:1.5,smash:traffic>0?2:1};
   let sum=0;
   for(const k of Object.keys(weights)){weights[k]*=Math.pow(.18,this.recentAttacks.filter(a=>a===k).length);sum+=weights[k];}
-  let choice=this.rng()*sum;
+  if(this.config.intensity==='savage'){sum+=weights.intercept*.6+weights.charge*.4;weights.intercept*=1.6;weights.charge*=1.4;}
+  let choice=this.tactics()*sum;
   for(const [k,w]of Object.entries(weights)){choice-=w;if(choice<=0)return k;}
   return 'charge';
  }
@@ -175,7 +179,7 @@ export class Chase{
     const u=clamp(age/a.travel,0,1),smooth=u*u*(3-2*u);
     m.x=lerp(a.from.x,a.target.x,smooth);m.z=lerp(a.from.z,a.target.z,smooth);
     m.h=angle(a.from,a.target);m.y=Math.sin(Math.PI*u)*(a.type==='intercept'?44:34);
-    if(u===1){m.s=a.targetS;m.lane=a.type==='flank'?-5:0;a.flight=false;this.emit('reveal',{attack:a.type,x:m.x,z:m.z});}
+    if(u===1){m.s=a.targetS;m.speed=2;m.lane=a.type==='flank'?-5:0;a.flight=false;this.emit('reveal',{attack:a.type,x:m.x,z:m.z});}
    }else{
     desiredGap=a.type==='charge'?4:a.type==='swipe'?6:12;
     desiredLane=a.type==='smash'?(c.lane<0?-7:7):a.targetLane;
@@ -195,7 +199,8 @@ export class Chase{
    if(age>=a.duration){this.emit('attackEnd',{attack:a.type});this.attack=null;}
   }
   if(!this.attack?.flight){
-   const target=clamp(c.speed+(c.s-m.s-desiredGap)*1.6,-10,this.config.intensity==='savage'?42:35);
+   const holding=this.attack?.type==='intercept'&&this.attack.impact&&m.s>c.s+3;
+   const target=holding?0:clamp(c.speed+(c.s-m.s-desiredGap)*1.6,-10,this.config.intensity==='savage'?42:35);
    m.speed+=clamp(target-m.speed,-25*dt,20*dt);m.s+=m.speed*dt;
    m.lane+=clamp(desiredLane-m.lane,-10*dt,10*dt);
    const p=this.point(m.s,m.lane);Object.assign(m,p);
