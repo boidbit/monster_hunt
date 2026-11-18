@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Chase,options,blockDescription,distance} from '../../chase/core.mjs';
+import {BODY_CLEARANCE,TRUCK_TOP,Chase,options,blockDescription,distance} from '../../chase/core.mjs';
 import {renderAudio} from '../../chase/audio.mjs';
 const run=(seed,duration=45,intensity='savage',history={})=>{
  const c=new Chase({seed,duration,intensity,history});
@@ -47,4 +47,35 @@ test('event audio is finite and audible',()=>{
  const c=run(42),a=renderAudio(c.time,c.events,[{speed:23}],8000);let energy=0,peak=0;
  for(const v of a){assert.ok(Number.isFinite(v));energy+=v*v;peak=Math.max(peak,Math.abs(v));}
  assert.ok(Math.sqrt(energy/a.length)>.01);assert.ok(peak<1);
+});
+
+test('stunt block includes four distinct obstacles, truck lift and two real rooftop contacts',()=>{
+ const sim=new Chase({seed:42,duration:45});let highest=0;const roofs=new Set(),obstacles=new Set();
+ while(!sim.finished){sim.step();highest=Math.max(highest,sim.car.y||0);
+  for(const event of sim.drain()){
+   if(event.type==='stunt')obstacles.add(event.kind);
+   if(event.type==='roofLand'){
+    const roof=[...sim.chunks.values()].flatMap(block=>block.buildings).find(b=>b.id===event.id);
+    assert.ok(roof);assert.ok(distance(roof,event)<.05);assert.ok(Math.abs(event.y-roof.height-.42)<.05);roofs.add(roof.id);
+   }
+  }
+ }
+ assert.equal(obstacles.size,4);assert.ok(highest>4);assert.ok(roofs.size>=2);
+});
+
+test('truck and monster keep physical clearance, including between ticks during landings and passes',()=>{
+ for(const seed of [0,1,7,42,99,120,1000])for(const intensity of ['intense','savage']){
+  const sim=new Chase({seed,intensity,duration:60});
+  while(!sim.finished){
+   const car={...sim.car},monster={...sim.monster};sim.step();sim.drain();
+   const x=monster.x-car.x,z=monster.z-car.z,dx=sim.monster.x-sim.car.x-x,dz=sim.monster.z-sim.car.z-z;
+   const start=monster.y-(car.y||0),end=sim.monster.y-(sim.car.y||0);
+   if(Math.min(start,end)>TRUCK_TOP)continue;
+   let lo=0,hi=1;
+   if(start>TRUCK_TOP)lo=(start-TRUCK_TOP)/(start-end);
+   if(end>TRUCK_TOP)hi=(TRUCK_TOP-start)/(end-start);
+   const t=Math.max(lo,Math.min(hi,-(x*dx+z*dz)/(dx*dx+dz*dz||1)));
+   assert.ok(Math.hypot(x+t*dx,z+t*dz)>=BODY_CLEARANCE,'Overlap at seed '+seed+' time '+sim.time);
+  }
+ }
 });

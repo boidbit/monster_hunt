@@ -22,6 +22,33 @@ export function blockDescription(x,z,seed){
 export function streetWidth(x,z){return (Math.abs(x+z)%3===0)?6.5:10;}
 const angle=(a,b)=>Math.atan2(b.x-a.x,b.z-a.z);
 const unit=a=>({x:Math.sin(a),z:Math.cos(a)});
+export function stuntAt(index,seed){
+ const deck=['ramp','pothole','barrier','market'],rng=random(seed^Math.imul(Math.floor(index/4)+31,2654435761));
+ for(let i=3;i>0;i--){const j=Math.floor(rng()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
+ return {index,kind:deck[(index%4+4)%4],s:index*GRID+47,lane:0};
+}
+export const BODY_CLEARANCE=10.5, TRUCK_TOP=4.6;
+function guardTruck(car,monster,previous,previousCar,offset,dt){
+ const wanted={x:monster.x,z:monster.z};
+ let x=monster.x+offset.x*Math.exp(-2.2*dt),z=monster.z+offset.z*Math.exp(-2.2*dt);
+ // Work in the truck's moving frame. Slide along the contact plane rather
+ // than letting either actor cross to the far side in a single tick.
+ const ax=previous.x-previousCar.x,az=previous.z-previousCar.z;
+ let bx=x-car.x,bz=z-car.z;
+ const altitude=monster.y-(car.y||0),oldAltitude=previous.y-(previousCar.y||0);
+ const buffer=BODY_CLEARANCE+.5;
+ if(Math.min(altitude,oldAltitude)<TRUCK_TOP+9){
+  const length=Math.hypot(ax,az),radius=buffer*clamp((TRUCK_TOP+9-Math.min(altitude,oldAltitude))/6,0,1);
+  if(length>.001&&length>=radius-.03){
+   const nx=ax/length,nz=az/length,along=bx*nx+bz*nz;
+   if(along<radius){bx+=(radius-along)*nx;bz+=(radius-along)*nz;}
+  }
+  const d=Math.hypot(bx,bz);
+  if(d<radius){const nx=d>.001?bx/d:Math.cos(car.h),nz=d>.001?bz/d:-Math.sin(car.h);bx=nx*radius;bz=nz*radius;}
+  x=car.x+bx;z=car.z+bz;
+ }
+ monster.x=x;monster.z=z;offset.x=x-wanted.x;offset.z=z-wanted.z;
+}
 export class Chase{
  constructor(input={}){
   this.config=options(input);this.rng=random(this.config.seed);
@@ -32,9 +59,9 @@ export class Chase{
   this.recentAttacks=[...(input.history?.attacks||[])].slice(-4);this.recentTurns=[...(input.history?.turns||[])].slice(-4);
   this.chunks=new Map();this.traffic=[];this.origin={x:0,z:0};this.nextTrafficId=0;
   this.car={s:22,lane:2.6,speed:20,lateralSpeed:0,health:100,nitro:100,roll:0,boosting:false};
-  this.monster={s:8,lane:-1,speed:24,y:0,roll:0};this.attack=null;this.nextAttack=1+this.rng()*1.5;
+  this.bodyOffset={x:0,z:0};this.monster={s:8,lane:-1,speed:24,y:0,roll:0};this.attack=null;this.nextAttack=1+this.rng()*1.5;
   this.lastTurn=-100;this.lastImpact=-100;this.hitCooldown=0;this.nextHorn=0;this.finished=false;this.finishReason=null;
-  this.metrics={attacks:0,dodges:0,collisions:0,turns:0,interceptions:0,nearMisses:0,trafficSpawned:0,trafficDistance:0,chunksGenerated:0,peakChunks:0,distance:0,rebases:0};
+  this.stuntPasses=0;this.roofContacts=0;this.melons=null;this.broken=new Set();this.metrics={attacks:0,dodges:0,collisions:0,turns:0,interceptions:0,nearMisses:0,trafficSpawned:0,trafficDistance:0,chunksGenerated:0,peakChunks:0,distance:0,rebases:0};
   this.extendRoute();this.updatePositions();this.syncCity();this.emit('start',{text:'NO SAFE WAY OUT.'});
  }
  emit(type,data={}){
@@ -108,6 +135,16 @@ export class Chase{
   if(type==='intercept'||type==='flank'){
    const targetS=c.s+(type==='intercept'?Math.max(86,c.speed*2.6+27):45),target=this.point(targetS,type==='flank'?-5:0);
    Object.assign(this.attack,{flight:true,targetS,target,travel:type==='intercept'?2.6:2.1});
+   if(type==='flank'){
+    const roofs=[...this.chunks.values()].flatMap(block=>block.buildings);
+    const first=roofs.slice().sort((left,right)=>distance(left,m)-distance(right,m))[0];
+    const ahead=this.point(c.s+110,0);
+    const second=roofs.filter(b=>b.id!==first.id&&distance(b,first)<105).sort((left,right)=>distance(left,ahead)-distance(right,ahead))[0];
+    if(second){
+     const landS=c.s+c.speed*4.8+10,land=this.point(landS,-5);
+     Object.assign(this.attack,{roofPath:[{x:m.x,z:m.z,y:0},{...first,y:first.height+.42},{...second,y:second.height+.42},{...land,y:0}],targetS:landS,target:land,travel:4.8,duration:5.9,stage:-1});
+    }
+   }
    this.metrics.interceptions++;
   }
   this.metrics.attacks++;this.recentAttacks.push(type);if(this.recentAttacks.length>4)this.recentAttacks.shift();
@@ -125,6 +162,7 @@ export class Chase{
   return 'charge';
  }
  step(){
+  const previous={...this.monster},previousCar={...this.car};
   const dt=FIXED_DT;this.tick++;this.time=this.tick*dt;this.hitCooldown-=dt;
   this.extendRoute();const c=this.car,m=this.monster,prevS=c.s,gap=distance(c,m);
   if(!this.attack&&this.time>=this.nextAttack&&gap<85)this.startAttack(this.chooseAttack());
@@ -146,6 +184,15 @@ export class Chase{
    const d=distance(t,c),ahead=(t.x-c.x)*forward.x+(t.z-c.z)*forward.z;
    if(d<14&&ahead>0&&ahead<13&&Math.abs((t.x-c.x)*right.x+(t.z-c.z)*right.z)<3)brake=true;
   }
+  const prop=stuntAt(Math.floor(c.s/GRID),this.config.seed),approach=prop.s-c.s;
+  if(approach>0&&approach<44){if(prop.kind==='ramp')targetLane=0;
+   if(prop.kind==='pothole'||prop.kind==='market')targetLane=(c.lane<0?-1:1)*(prop.kind==='market'?3:5.8);}
+  const landing=this.attack?.flight?this.attack.target:null;
+  const roadblock=(!this.attack?.flight&&m.s>=c.s-2&&m.s-c.s<45)|| (landing&&distance(c,landing)<45);
+  if(roadblock){const lane=landing?(this.attack.type==='flank'?-5:0):m.lane;
+   targetLane=lane>1?-5.8:lane< -1?5.8:c.lane<0?-5.8:5.8;
+   if(gap<22&&Math.abs(c.lane-lane)<5)brake=true;
+  }
   const corner=Math.abs(this.point(c.s+8).turn)>.2;
   c.boosting=!brake&&!corner&&gap<18&&c.nitro>15;
   c.nitro=clamp(c.nitro+(c.boosting?-25:11)*dt,0,100);
@@ -154,6 +201,18 @@ export class Chase{
   c.lateralSpeed+=clamp((targetLane-c.lane)*4-c.lateralSpeed*3,-15,15)*dt;
   c.lane=clamp(c.lane+c.lateralSpeed*dt,-6.2,6.2);c.roll=-c.lateralSpeed*.024;
   c.s+=c.speed*dt;this.updatePositions();
+  const along=c.s-prop.s;
+  c.y=0;c.pitch=0;
+  if(prop.kind==='ramp'&&Math.abs(c.lane)<3.6){
+   if(along>=-8&&along<0){c.y=(along+8)*.32;c.pitch=-.30;}
+   if(along>=0&&along<24){const u=along/24;c.y=(1-u)*2.56+15*u*(1-u);c.pitch=(u-.45)*.52;}
+  }
+  if(prevS<prop.s&&c.s>=prop.s){this.stuntPasses++;this.emit('stunt',{kind:prop.kind,index:prop.index,x:c.x,z:c.z});
+   if(prop.kind==='pothole'&&Math.abs(c.lane)<3)this.damage('pothole');
+   if(prop.kind==='market')this.melons={...this.point(prop.s),time:this.time,index:prop.index,s:prop.s};
+  }
+  if(this.melons&&!this.melons.slipped&&Math.abs(m.s-this.melons.s)<5&&m.y<1&&this.time-this.melons.time<4){this.melons.slipped=true;m.slipUntil=this.time+.85;this.emit('slip');}
+  if(prop.kind==='barrier'&&Math.abs(m.s-prop.s)<2&&m.y<2&&!this.broken.has(prop.index)){this.broken.add(prop.index);if(this.broken.size>12)this.broken.delete(this.broken.values().next().value);this.emit('snap');}
   if(Math.floor(c.s/GRID)!==Math.floor(prevS/GRID)){
    const n=this.route[Math.floor(c.s/GRID)+1-this.routeBase];
    if(n?.choice&&n.choice!=='straight'){this.metrics.turns++;this.lastTurn=this.time;this.emit('turn',{direction:n.choice,x:c.x,z:c.z});}
@@ -168,20 +227,28 @@ export class Chase{
    t.speed+=clamp((t.hit?0:blocked?0:danger?t.cruise*1.25:t.cruise)-t.speed,-18*dt,7*dt);
    t.x+=dir.x*t.speed*dt;t.z+=dir.z*t.speed*dt;this.metrics.trafficDistance+=t.speed*dt;
    const d=distance(t,c);
-   if(d<3.1&&!t.hit){t.hit=true;this.damage('traffic');this.emit('traffic',{x:t.x,z:t.z});}
+   if(d<3.1&&(c.y||0)<2&&!t.hit){t.hit=true;this.damage('traffic');this.emit('traffic',{x:t.x,z:t.z});}
    else if(d<6&&!t.near){t.near=true;this.metrics.nearMisses++;this.emit('nearMiss',{x:t.x,z:t.z});}
    if(danger&&this.time>this.nextHorn){this.nextHorn=this.time+1.4;this.emit('horn',{x:t.x,z:t.z});}
   }
-  m.y=0;m.roll=0;let desiredGap=11,desiredLane=c.lane*.6;
+  m.y=0;m.roll=0;let desiredGap=13,desiredLane=c.lane*.6,impactToCheck=null;
   if(this.attack){
    const a=this.attack,age=this.time-a.start;
    if(a.flight){
     const u=clamp(age/a.travel,0,1),smooth=u*u*(3-2*u);
     m.x=lerp(a.from.x,a.target.x,smooth);m.z=lerp(a.from.z,a.target.z,smooth);
     m.h=angle(a.from,a.target);m.y=Math.sin(Math.PI*u)*(a.type==='intercept'?44:34);
+    if(a.roofPath){
+     const stage=age<1.2?0:age<1.55?1:age<3.05?2:age<3.50?3:4;
+     const start=[0,1.2,1.55,3.05,3.50][stage],span=[1.2,.35,1.5,.45,1.30][stage];
+     const k=clamp((age-start)/span,0,1),from=a.roofPath[[0,1,1,2,2][stage]],to=a.roofPath[[1,1,2,2,3][stage]];
+     m.x=lerp(from.x,to.x,k);m.z=lerp(from.z,to.z,k);m.y=lerp(from.y,to.y,k)+Math.sin(k*Math.PI)*[13,0,17,0,13][stage];
+     if(from!==to)m.h=angle(from,to);
+     if(stage!==a.stage&&(stage===1||stage===3)){this.roofContacts++;this.emit('roofLand',{id:to.id,x:m.x,z:m.z,y:m.y});}a.stage=stage;
+    }
     if(u===1){m.s=a.targetS;m.speed=2;m.lane=a.type==='flank'?-5:0;a.flight=false;this.emit('reveal',{attack:a.type,x:m.x,z:m.z});}
    }else{
-    desiredGap=a.type==='charge'?4:a.type==='swipe'?6:12;
+    desiredGap=a.type==='charge'?10.9:a.type==='swipe'?11.4:13;
     desiredLane=a.type==='smash'?(c.lane<0?-7:7):a.targetLane;
     if(a.type==='leap')m.y=Math.sin(clamp(age/1.9,0,1)*Math.PI)*12;
    }
@@ -193,12 +260,12 @@ export class Chase{
      const all=[...this.chunks.values()].flatMap(b=>b.buildings).sort((a,b)=>distance(a,m)-distance(b,m));
      if(all[0])this.emit('collapse',{...all[0]});
     }
-    if(distance(c,m)<7&&Math.abs(c.lane-m.lane)<3)this.damage(a.type);
-    else {this.metrics.dodges++;this.emit('dodge',{attack:a.type});}
+    impactToCheck=a;
    }
    if(age>=a.duration){this.emit('attackEnd',{attack:a.type});this.attack=null;}
   }
   if(!this.attack?.flight){
+   if(m.s>c.s-4&&m.s<c.s+40){desiredLane=c.lane<0?5.8:-5.8;}
    const holding=this.attack?.type==='intercept'&&this.attack.impact&&m.s>c.s+3;
    const target=holding?0:clamp(c.speed+(c.s-m.s-desiredGap)*1.6,-10,this.config.intensity==='savage'?42:35);
    m.speed+=clamp(target-m.speed,-25*dt,20*dt);m.s+=m.speed*dt;
@@ -206,7 +273,15 @@ export class Chase{
    const p=this.point(m.s,m.lane);Object.assign(m,p);
    if(m.s>c.s+4)m.h+=Math.PI;
   }
-  if(Math.floor(m.s/7)!==this.foot&&m.y<1){this.foot=Math.floor(m.s/7);this.emit('foot');}
+  guardTruck(c,m,previous,previousCar,this.bodyOffset,dt);
+  const bodyGap=distance(c,m);
+  if(impactToCheck){
+   const glancingHit=bodyGap<=BODY_CLEARANCE+1.2&&m.y<2&&Math.abs(c.lane-impactToCheck.targetLane)<3;
+   if(glancingHit)this.damage(impactToCheck.type);
+   else {this.metrics.dodges++;this.emit('dodge',{attack:impactToCheck.type});}
+  }
+  if(m.y<(c.y||0)+TRUCK_TOP)this.metrics.minGroundGap=Math.min(this.metrics.minGroundGap??Infinity,bodyGap);
+  if(Math.floor(m.s/10)!==this.foot&&m.y<1){this.foot=Math.floor(m.s/10);this.emit('foot');}
   this.syncCity();this.metrics.distance=c.s-22;
   const nowGap=distance(c,m);
   if(!this.finished&&this.time>=30){
