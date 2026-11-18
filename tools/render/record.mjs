@@ -5,7 +5,7 @@ import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {startServer,root} from './server.mjs';
 import {randomBytes} from 'node:crypto';
-import {options} from '../../chase/core.mjs';
+import {options,BODY_CLEARANCE} from '../../chase/core.mjs';
 import {renderAudio} from '../../chase/audio.mjs';
 
 const suppliedSeed=process.env.CHASE_SEED;
@@ -54,6 +54,7 @@ try{
     console.log('SMOKE_REPORT '+JSON.stringify({metrics:report.snapshot.metrics,stats:report.stats,errors}));
     const first=samples.slice(5,15).map(s=>s.geometries),last=samples.slice(-10).map(s=>s.geometries);
     assert.ok(Math.max(...last)<=Math.max(...first)+12,'Geometry count grows after chunks are recycled.');
+    assert.ok(report.snapshot.metrics.minGroundGap>=BODY_CLEARANCE,'Monster entered the truck clearance zone.');
     assert.ok(report.stats.subjectVisible/report.stats.frames>.98,'Intended subject leaves the frame.');
     assert.ok(report.stats.subjectClear/report.stats.frames>.98,'Buildings obscure the intended subject.');
     assert.ok(report.stats.streetFrames/report.stats.frames>.5,'Chase is dominated by aerial shots.');
@@ -76,6 +77,7 @@ try{
     }
     const report=await page.evaluate(()=>window.chase.report());
     assert.equal(errors.length,0,errors.join('\n'));
+    assert.ok(report.snapshot.metrics.minGroundGap>=BODY_CLEARANCE,'Monster entered the truck clearance zone.');
     assert.ok(report.stats.subjectVisible/report.stats.frames>.98,'Intended subject leaves the frame.');
     assert.ok(report.stats.subjectClear/report.stats.frames>.98,'Buildings obscure the intended subject.');
     assert.ok(report.stats.streetFrames/report.stats.frames>.5,'Chase is dominated by aerial shots.');

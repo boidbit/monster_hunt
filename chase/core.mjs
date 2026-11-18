@@ -27,6 +27,28 @@ export function stuntAt(index,seed){
  for(let i=3;i>0;i--){const j=Math.floor(rng()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
  return {index,kind:deck[(index%4+4)%4],s:index*GRID+47,lane:0};
 }
+export const BODY_CLEARANCE=10.5, TRUCK_TOP=4.6;
+function guardTruck(car,monster,previous,previousCar,offset,dt){
+ const wanted={x:monster.x,z:monster.z};
+ let x=monster.x+offset.x*Math.exp(-2.2*dt),z=monster.z+offset.z*Math.exp(-2.2*dt);
+ // Work in the truck's moving frame. Slide along the contact plane rather
+ // than letting either actor cross to the far side in a single tick.
+ const ax=previous.x-previousCar.x,az=previous.z-previousCar.z;
+ let bx=x-car.x,bz=z-car.z;
+ const altitude=monster.y-(car.y||0),oldAltitude=previous.y-(previousCar.y||0);
+ const buffer=BODY_CLEARANCE+.5;
+ if(Math.min(altitude,oldAltitude)<TRUCK_TOP+9){
+  const length=Math.hypot(ax,az),radius=buffer*clamp((TRUCK_TOP+9-Math.min(altitude,oldAltitude))/6,0,1);
+  if(length>.001&&length>=radius-.03){
+   const nx=ax/length,nz=az/length,along=bx*nx+bz*nz;
+   if(along<radius){bx+=(radius-along)*nx;bz+=(radius-along)*nz;}
+  }
+  const d=Math.hypot(bx,bz);
+  if(d<radius){const nx=d>.001?bx/d:Math.cos(car.h),nz=d>.001?bz/d:-Math.sin(car.h);bx=nx*radius;bz=nz*radius;}
+  x=car.x+bx;z=car.z+bz;
+ }
+ monster.x=x;monster.z=z;offset.x=x-wanted.x;offset.z=z-wanted.z;
+}
 export class Chase{
  constructor(input={}){
   this.config=options(input);this.rng=random(this.config.seed);
@@ -37,7 +59,7 @@ export class Chase{
   this.recentAttacks=[...(input.history?.attacks||[])].slice(-4);this.recentTurns=[...(input.history?.turns||[])].slice(-4);
   this.chunks=new Map();this.traffic=[];this.origin={x:0,z:0};this.nextTrafficId=0;
   this.car={s:22,lane:2.6,speed:20,lateralSpeed:0,health:100,nitro:100,roll:0,boosting:false};
-  this.monster={s:8,lane:-1,speed:24,y:0,roll:0};this.attack=null;this.nextAttack=1+this.rng()*1.5;
+  this.bodyOffset={x:0,z:0};this.monster={s:8,lane:-1,speed:24,y:0,roll:0};this.attack=null;this.nextAttack=1+this.rng()*1.5;
   this.lastTurn=-100;this.lastImpact=-100;this.hitCooldown=0;this.nextHorn=0;this.finished=false;this.finishReason=null;
   this.stuntPasses=0;this.roofContacts=0;this.melons=null;this.broken=new Set();this.metrics={attacks:0,dodges:0,collisions:0,turns:0,interceptions:0,nearMisses:0,trafficSpawned:0,trafficDistance:0,chunksGenerated:0,peakChunks:0,distance:0,rebases:0};
   this.extendRoute();this.updatePositions();this.syncCity();this.emit('start',{text:'NO SAFE WAY OUT.'});
@@ -140,6 +162,7 @@ export class Chase{
   return 'charge';
  }
  step(){
+  const previous={...this.monster},previousCar={...this.car};
   const dt=FIXED_DT;this.tick++;this.time=this.tick*dt;this.hitCooldown-=dt;
   this.extendRoute();const c=this.car,m=this.monster,prevS=c.s,gap=distance(c,m);
   if(!this.attack&&this.time>=this.nextAttack&&gap<85)this.startAttack(this.chooseAttack());
@@ -164,6 +187,12 @@ export class Chase{
   const prop=stuntAt(Math.floor(c.s/GRID),this.config.seed),approach=prop.s-c.s;
   if(approach>0&&approach<44){if(prop.kind==='ramp')targetLane=0;
    if(prop.kind==='pothole'||prop.kind==='market')targetLane=(c.lane<0?-1:1)*(prop.kind==='market'?3:5.8);}
+  const landing=this.attack?.flight?this.attack.target:null;
+  const roadblock=(!this.attack?.flight&&m.s>=c.s-2&&m.s-c.s<45)|| (landing&&distance(c,landing)<45);
+  if(roadblock){const lane=landing?(this.attack.type==='flank'?-5:0):m.lane;
+   targetLane=lane>1?-5.8:lane< -1?5.8:c.lane<0?-5.8:5.8;
+   if(gap<22&&Math.abs(c.lane-lane)<5)brake=true;
+  }
   const corner=Math.abs(this.point(c.s+8).turn)>.2;
   c.boosting=!brake&&!corner&&gap<18&&c.nitro>15;
   c.nitro=clamp(c.nitro+(c.boosting?-25:11)*dt,0,100);
@@ -202,7 +231,7 @@ export class Chase{
    else if(d<6&&!t.near){t.near=true;this.metrics.nearMisses++;this.emit('nearMiss',{x:t.x,z:t.z});}
    if(danger&&this.time>this.nextHorn){this.nextHorn=this.time+1.4;this.emit('horn',{x:t.x,z:t.z});}
   }
-  m.y=0;m.roll=0;let desiredGap=11,desiredLane=c.lane*.6;
+  m.y=0;m.roll=0;let desiredGap=13,desiredLane=c.lane*.6,impactToCheck=null;
   if(this.attack){
    const a=this.attack,age=this.time-a.start;
    if(a.flight){
@@ -219,7 +248,7 @@ export class Chase{
     }
     if(u===1){m.s=a.targetS;m.speed=2;m.lane=a.type==='flank'?-5:0;a.flight=false;this.emit('reveal',{attack:a.type,x:m.x,z:m.z});}
    }else{
-    desiredGap=a.type==='charge'?4:a.type==='swipe'?6:12;
+    desiredGap=a.type==='charge'?10.9:a.type==='swipe'?11.4:13;
     desiredLane=a.type==='smash'?(c.lane<0?-7:7):a.targetLane;
     if(a.type==='leap')m.y=Math.sin(clamp(age/1.9,0,1)*Math.PI)*12;
    }
@@ -231,12 +260,12 @@ export class Chase{
      const all=[...this.chunks.values()].flatMap(b=>b.buildings).sort((a,b)=>distance(a,m)-distance(b,m));
      if(all[0])this.emit('collapse',{...all[0]});
     }
-    if(distance(c,m)<7&&Math.abs(c.lane-m.lane)<3)this.damage(a.type);
-    else {this.metrics.dodges++;this.emit('dodge',{attack:a.type});}
+    impactToCheck=a;
    }
    if(age>=a.duration){this.emit('attackEnd',{attack:a.type});this.attack=null;}
   }
   if(!this.attack?.flight){
+   if(m.s>c.s-4&&m.s<c.s+40){desiredLane=c.lane<0?5.8:-5.8;}
    const holding=this.attack?.type==='intercept'&&this.attack.impact&&m.s>c.s+3;
    const target=holding?0:clamp(c.speed+(c.s-m.s-desiredGap)*1.6,-10,this.config.intensity==='savage'?42:35);
    m.speed+=clamp(target-m.speed,-25*dt,20*dt);m.s+=m.speed*dt;
@@ -244,6 +273,14 @@ export class Chase{
    const p=this.point(m.s,m.lane);Object.assign(m,p);
    if(m.s>c.s+4)m.h+=Math.PI;
   }
+  guardTruck(c,m,previous,previousCar,this.bodyOffset,dt);
+  const bodyGap=distance(c,m);
+  if(impactToCheck){
+   const glancingHit=bodyGap<=BODY_CLEARANCE+1.2&&m.y<2&&Math.abs(c.lane-impactToCheck.targetLane)<3;
+   if(glancingHit)this.damage(impactToCheck.type);
+   else {this.metrics.dodges++;this.emit('dodge',{attack:impactToCheck.type});}
+  }
+  if(m.y<(c.y||0)+TRUCK_TOP)this.metrics.minGroundGap=Math.min(this.metrics.minGroundGap??Infinity,bodyGap);
   if(Math.floor(m.s/10)!==this.foot&&m.y<1){this.foot=Math.floor(m.s/10);this.emit('foot');}
   this.syncCity();this.metrics.distance=c.s-22;
   const nowGap=distance(c,m);
