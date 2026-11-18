@@ -1,0 +1,28 @@
+name: Render Florida explainer demo
+on:
+  push:
+    branches: [demo/florida-learjet-explainer]
+    paths: ['news-demo/**', '.github/workflows/florida-demo.yml']
+permissions:
+  contents: read
+jobs:
+  demo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install media tools on cloud runner
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends espeak-ng fonts-noto-core fonts-dejavu-core ffmpeg python3-pil
+      - name: Render narrated Hindi short and verify media
+        run: /usr/bin/python3 news-demo/render.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: florida-learjet-hindi
+          retention-days: 14
+          path: |
+            demo-output/*.mp4
+            demo-output/*.srt
+            demo-output/preview.jpg
+            news-demo/sources.txt
