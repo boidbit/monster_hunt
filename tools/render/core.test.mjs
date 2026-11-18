@@ -48,3 +48,17 @@ test('event audio is finite and audible',()=>{
  for(const v of a){assert.ok(Number.isFinite(v));energy+=v*v;peak=Math.max(peak,Math.abs(v));}
  assert.ok(Math.sqrt(energy/a.length)>.01);assert.ok(peak<1);
 });
+
+test('stunt block includes four distinct obstacles, truck lift and two real rooftop contacts',()=>{
+ const sim=new Chase({seed:42,duration:45});let highest=0;const roofs=new Set(),obstacles=new Set();
+ while(!sim.finished){sim.step();highest=Math.max(highest,sim.car.y||0);
+  for(const event of sim.drain()){
+   if(event.type==='stunt')obstacles.add(event.kind);
+   if(event.type==='roofLand'){
+    const roof=[...sim.chunks.values()].flatMap(block=>block.buildings).find(b=>b.id===event.id);
+    assert.ok(roof);assert.ok(distance(roof,event)<.05);assert.ok(Math.abs(event.y-roof.height-.42)<.05);roofs.add(roof.id);
+   }
+  }
+ }
+ assert.equal(obstacles.size,4);assert.ok(highest>4);assert.ok(roofs.size>=2);
+});

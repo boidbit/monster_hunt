@@ -22,6 +22,11 @@ export function blockDescription(x,z,seed){
 export function streetWidth(x,z){return (Math.abs(x+z)%3===0)?6.5:10;}
 const angle=(a,b)=>Math.atan2(b.x-a.x,b.z-a.z);
 const unit=a=>({x:Math.sin(a),z:Math.cos(a)});
+export function stuntAt(index,seed){
+ const deck=['ramp','pothole','barrier','market'],rng=random(seed^Math.imul(Math.floor(index/4)+31,2654435761));
+ for(let i=3;i>0;i--){const j=Math.floor(rng()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
+ return {index,kind:deck[(index%4+4)%4],s:index*GRID+47,lane:0};
+}
 export class Chase{
  constructor(input={}){
   this.config=options(input);this.rng=random(this.config.seed);
@@ -34,7 +39,7 @@ export class Chase{
   this.car={s:22,lane:2.6,speed:20,lateralSpeed:0,health:100,nitro:100,roll:0,boosting:false};
   this.monster={s:8,lane:-1,speed:24,y:0,roll:0};this.attack=null;this.nextAttack=1+this.rng()*1.5;
   this.lastTurn=-100;this.lastImpact=-100;this.hitCooldown=0;this.nextHorn=0;this.finished=false;this.finishReason=null;
-  this.metrics={attacks:0,dodges:0,collisions:0,turns:0,interceptions:0,nearMisses:0,trafficSpawned:0,trafficDistance:0,chunksGenerated:0,peakChunks:0,distance:0,rebases:0};
+  this.stuntPasses=0;this.roofContacts=0;this.melons=null;this.broken=new Set();this.metrics={attacks:0,dodges:0,collisions:0,turns:0,interceptions:0,nearMisses:0,trafficSpawned:0,trafficDistance:0,chunksGenerated:0,peakChunks:0,distance:0,rebases:0};
   this.extendRoute();this.updatePositions();this.syncCity();this.emit('start',{text:'NO SAFE WAY OUT.'});
  }
  emit(type,data={}){
@@ -108,6 +113,16 @@ export class Chase{
   if(type==='intercept'||type==='flank'){
    const targetS=c.s+(type==='intercept'?Math.max(86,c.speed*2.6+27):45),target=this.point(targetS,type==='flank'?-5:0);
    Object.assign(this.attack,{flight:true,targetS,target,travel:type==='intercept'?2.6:2.1});
+   if(type==='flank'){
+    const roofs=[...this.chunks.values()].flatMap(block=>block.buildings);
+    const first=roofs.slice().sort((left,right)=>distance(left,m)-distance(right,m))[0];
+    const ahead=this.point(c.s+110,0);
+    const second=roofs.filter(b=>b.id!==first.id&&distance(b,first)<105).sort((left,right)=>distance(left,ahead)-distance(right,ahead))[0];
+    if(second){
+     const landS=c.s+c.speed*4.8+10,land=this.point(landS,-5);
+     Object.assign(this.attack,{roofPath:[{x:m.x,z:m.z,y:0},{...first,y:first.height+.42},{...second,y:second.height+.42},{...land,y:0}],targetS:landS,target:land,travel:4.8,duration:5.9,stage:-1});
+    }
+   }
    this.metrics.interceptions++;
   }
   this.metrics.attacks++;this.recentAttacks.push(type);if(this.recentAttacks.length>4)this.recentAttacks.shift();
@@ -146,6 +161,9 @@ export class Chase{
    const d=distance(t,c),ahead=(t.x-c.x)*forward.x+(t.z-c.z)*forward.z;
    if(d<14&&ahead>0&&ahead<13&&Math.abs((t.x-c.x)*right.x+(t.z-c.z)*right.z)<3)brake=true;
   }
+  const prop=stuntAt(Math.floor(c.s/GRID),this.config.seed),approach=prop.s-c.s;
+  if(approach>0&&approach<44){if(prop.kind==='ramp')targetLane=0;
+   if(prop.kind==='pothole'||prop.kind==='market')targetLane=(c.lane<0?-1:1)*(prop.kind==='market'?3:5.8);}
   const corner=Math.abs(this.point(c.s+8).turn)>.2;
   c.boosting=!brake&&!corner&&gap<18&&c.nitro>15;
   c.nitro=clamp(c.nitro+(c.boosting?-25:11)*dt,0,100);
@@ -154,6 +172,18 @@ export class Chase{
   c.lateralSpeed+=clamp((targetLane-c.lane)*4-c.lateralSpeed*3,-15,15)*dt;
   c.lane=clamp(c.lane+c.lateralSpeed*dt,-6.2,6.2);c.roll=-c.lateralSpeed*.024;
   c.s+=c.speed*dt;this.updatePositions();
+  const along=c.s-prop.s;
+  c.y=0;c.pitch=0;
+  if(prop.kind==='ramp'&&Math.abs(c.lane)<3.6){
+   if(along>=-8&&along<0){c.y=(along+8)*.32;c.pitch=-.30;}
+   if(along>=0&&along<24){const u=along/24;c.y=(1-u)*2.56+15*u*(1-u);c.pitch=(u-.45)*.52;}
+  }
+  if(prevS<prop.s&&c.s>=prop.s){this.stuntPasses++;this.emit('stunt',{kind:prop.kind,index:prop.index,x:c.x,z:c.z});
+   if(prop.kind==='pothole'&&Math.abs(c.lane)<3)this.damage('pothole');
+   if(prop.kind==='market')this.melons={...this.point(prop.s),time:this.time,index:prop.index,s:prop.s};
+  }
+  if(this.melons&&!this.melons.slipped&&Math.abs(m.s-this.melons.s)<5&&m.y<1&&this.time-this.melons.time<4){this.melons.slipped=true;m.slipUntil=this.time+.85;this.emit('slip');}
+  if(prop.kind==='barrier'&&Math.abs(m.s-prop.s)<2&&m.y<2&&!this.broken.has(prop.index)){this.broken.add(prop.index);if(this.broken.size>12)this.broken.delete(this.broken.values().next().value);this.emit('snap');}
   if(Math.floor(c.s/GRID)!==Math.floor(prevS/GRID)){
    const n=this.route[Math.floor(c.s/GRID)+1-this.routeBase];
    if(n?.choice&&n.choice!=='straight'){this.metrics.turns++;this.lastTurn=this.time;this.emit('turn',{direction:n.choice,x:c.x,z:c.z});}
@@ -168,7 +198,7 @@ export class Chase{
    t.speed+=clamp((t.hit?0:blocked?0:danger?t.cruise*1.25:t.cruise)-t.speed,-18*dt,7*dt);
    t.x+=dir.x*t.speed*dt;t.z+=dir.z*t.speed*dt;this.metrics.trafficDistance+=t.speed*dt;
    const d=distance(t,c);
-   if(d<3.1&&!t.hit){t.hit=true;this.damage('traffic');this.emit('traffic',{x:t.x,z:t.z});}
+   if(d<3.1&&(c.y||0)<2&&!t.hit){t.hit=true;this.damage('traffic');this.emit('traffic',{x:t.x,z:t.z});}
    else if(d<6&&!t.near){t.near=true;this.metrics.nearMisses++;this.emit('nearMiss',{x:t.x,z:t.z});}
    if(danger&&this.time>this.nextHorn){this.nextHorn=this.time+1.4;this.emit('horn',{x:t.x,z:t.z});}
   }
@@ -179,6 +209,14 @@ export class Chase{
     const u=clamp(age/a.travel,0,1),smooth=u*u*(3-2*u);
     m.x=lerp(a.from.x,a.target.x,smooth);m.z=lerp(a.from.z,a.target.z,smooth);
     m.h=angle(a.from,a.target);m.y=Math.sin(Math.PI*u)*(a.type==='intercept'?44:34);
+    if(a.roofPath){
+     const stage=age<1.2?0:age<1.55?1:age<3.05?2:age<3.50?3:4;
+     const start=[0,1.2,1.55,3.05,3.50][stage],span=[1.2,.35,1.5,.45,1.30][stage];
+     const k=clamp((age-start)/span,0,1),from=a.roofPath[[0,1,1,2,2][stage]],to=a.roofPath[[1,1,2,2,3][stage]];
+     m.x=lerp(from.x,to.x,k);m.z=lerp(from.z,to.z,k);m.y=lerp(from.y,to.y,k)+Math.sin(k*Math.PI)*[13,0,17,0,13][stage];
+     if(from!==to)m.h=angle(from,to);
+     if(stage!==a.stage&&(stage===1||stage===3)){this.roofContacts++;this.emit('roofLand',{id:to.id,x:m.x,z:m.z,y:m.y});}a.stage=stage;
+    }
     if(u===1){m.s=a.targetS;m.speed=2;m.lane=a.type==='flank'?-5:0;a.flight=false;this.emit('reveal',{attack:a.type,x:m.x,z:m.z});}
    }else{
     desiredGap=a.type==='charge'?4:a.type==='swipe'?6:12;
@@ -206,7 +244,7 @@ export class Chase{
    const p=this.point(m.s,m.lane);Object.assign(m,p);
    if(m.s>c.s+4)m.h+=Math.PI;
   }
-  if(Math.floor(m.s/7)!==this.foot&&m.y<1){this.foot=Math.floor(m.s/7);this.emit('foot');}
+  if(Math.floor(m.s/10)!==this.foot&&m.y<1){this.foot=Math.floor(m.s/10);this.emit('foot');}
   this.syncCity();this.metrics.distance=c.s-22;
   const nowGap=distance(c,m);
   if(!this.finished&&this.time>=30){

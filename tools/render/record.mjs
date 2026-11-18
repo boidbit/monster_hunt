@@ -54,8 +54,9 @@ try{
     console.log('SMOKE_REPORT '+JSON.stringify({metrics:report.snapshot.metrics,stats:report.stats,errors}));
     const first=samples.slice(5,15).map(s=>s.geometries),last=samples.slice(-10).map(s=>s.geometries);
     assert.ok(Math.max(...last)<=Math.max(...first)+12,'Geometry count grows after chunks are recycled.');
-    assert.ok(report.stats.bothVisibleRatio>.85,'Actors leave the camera too frequently.');
-    assert.ok(report.stats.bothUnoccludedRatio>.98,'Buildings obscure the chase too frequently.');
+    assert.ok(report.stats.subjectVisible/report.stats.frames>.98,'Intended subject leaves the frame.');
+    assert.ok(report.stats.subjectClear/report.stats.frames>.98,'Buildings obscure the intended subject.');
+    assert.ok(report.stats.streetFrames/report.stats.frames>.5,'Chase is dominated by aerial shots.');
     assert.ok(report.stats.maxOccludedFrames<=12,'A building hides an actor for over 0.4 seconds.');
     assert.equal(errors.length,0,errors.join('\n'));
     await writeFile(resolve(output,'smoke-report.json'),JSON.stringify({...report,samples,errors},null,2));
@@ -75,8 +76,9 @@ try{
     }
     const report=await page.evaluate(()=>window.chase.report());
     assert.equal(errors.length,0,errors.join('\n'));
-    assert.ok(report.stats.bothVisibleRatio>.85,'Actors leave the camera too frequently.');
-    assert.ok(report.stats.bothUnoccludedRatio>.98,'Buildings obscure the chase too frequently.');
+    assert.ok(report.stats.subjectVisible/report.stats.frames>.98,'Intended subject leaves the frame.');
+    assert.ok(report.stats.subjectClear/report.stats.frames>.98,'Buildings obscure the intended subject.');
+    assert.ok(report.stats.streetFrames/report.stats.frames>.5,'Chase is dominated by aerial shots.');
     assert.ok(report.stats.maxOccludedFrames<=12,'A building hides an actor for over 0.4 seconds.');
     assert.ok(telemetry.every(f=>f.health>0),'The car did not survive the directed take.');
     assert.ok(new Set(report.events.filter(e=>e.type==='attack').map(e=>e.attack)).size>=3);

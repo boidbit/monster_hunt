@@ -20,8 +20,13 @@ export function buildMonster(THREE){
   const limb=(x,y,w,h,d)=>{ const g=new THREE.Group(); g.position.set(x,y,0); body.add(g); box(w,h,d,lime,0,-h/2,0,g); return g; };
   const armL=limb(-1.25,3.1,0.5,1.1,0.5), armR=limb(1.25,3.1,0.5,1.1,0.5);
   const legL=new THREE.Group(), legR=new THREE.Group();
-  legL.position.set(-0.55,1.25,0); legR.position.set(0.55,1.25,0); root.add(legL,legR);
-  box(0.75,1.25,0.85,lime,0,-0.62,0,legL); box(0.75,1.25,0.85,lime,0,-0.62,0,legR);
+  legL.position.set(-.64,2.65,0); legR.position.set(.64,2.65,0); root.add(legL,legR);
+  for(const leg of [legL,legR]){
+   box(.90,1.46,1.05,lime,0,-.63,0,leg);
+   box(.68,1.15,.78,belly,0,-1.87,-.05,leg);
+   box(1.04,.39,1.75,lime,0,-2.45,.32,leg);
+   for(const toe of [-.3,.3])box(.29,.22,.58,white,toe,-2.54,1.04,leg);
+  }
   return {root,body,armL,armR,legL,legR,lime,belly,pupil};
 }
 

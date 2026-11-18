@@ -4,7 +4,9 @@ The director drives through a streamed grid of connected streets and intersectio
 
 Thirty moving cars and buses occupy the nearby roads. They follow traffic ahead, brake when blocked, and accelerate and sound horns near the monster. The monster chooses swipes, charges, leaps, building smashes and aerial shortcuts based on distance, street turns, nearby traffic and recently used attacks. Interceptions move continuously to a predicted route position and can land ahead of the truck; the monster can misjudge a changing situation.
 
-There is no timestamped attack sequence. Event-specific cameras include pursuit, rear tracking, side tracking, intersection and reveal shots. Framing and building raycasts are checked every frame. Shots have a minimum hold time; when a building obstructs the chase, the camera rises or cuts to a clear view. Aerial shortcuts deliberately use wider views.
+There is no timestamped attack sequence. Street-level rear, curbside ramp, intersection, low monster and bonnet shots follow one subject. Roof shots follow the monster across two generated buildings, holding through touchdown. The recorder checks the intended subject’s framing and sightline and requires a majority of street-level frames.
+
+Ramps lift the truck, potholes trigger swerves, barriers can be snapped by the monster and market carts spill rolling melons. Each group of four street segments draws the four obstacle types in seeded order. Longer articulated-looking legs, broad toes and a distance-based stance/swing cycle replace the rapid shuffle.
 
 ## One workflow
 
