@@ -34,7 +34,10 @@ jobs:
         run: npm install
 
       - name: Copy latest game into www
-        run: cp index.html www/index.html
+        run: |
+          cp index.html www/index.html
+          mkdir -p www/chase
+          cp chase/*.html chase/*.css chase/*.mjs www/chase/
 
       - name: Sync Capacitor
         run: npx cap sync android

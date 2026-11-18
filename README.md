@@ -2,6 +2,10 @@
 
 A 3D arcade game built with [Three.js](https://threejs.org/). A monster is wrecking the city. Drive your armored truck through the streets, hunt it down, and knock it out three times before the city (or your truck) goes down.
 
+## Cinematic endless chase
+
+A new **The Chase** mode lets a scripted director drive the truck while an aggressive monster pursues it through streamed city streets. It supports reactive dodges, cinematic camera changes and cloud MP4 recording with synchronized sound. See [director mode and recording instructions](chase/README.md).
+
 ## How to play
 
 - **Joystick (bottom-left):** push it the way you want to drive. Pull it back to brake and reverse.
